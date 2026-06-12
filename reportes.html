@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AquaReward · Reportes</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=Manrope:wght@400;500;600;700&display=swap');
+
+  :root{
+    --azul-essbio:#021C8A;
+    --aqua:#0E9FBE;
+    --aqua-soft:#51C2CA;
+    --ahorro:#1E9B6B;
+    --texto:#233249;
+    --superficie:#FFFFFF;
+    --fondo:#F4F8FB;
+    --borde:#D9E2EC;
+    --texto-suave:#5E7088;
+    --rojo:#E0544A;
+    --azul-grad:linear-gradient(135deg,#021C8A 0%,#0E9FBE 100%);
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{width:100%;height:100%}
+  body{
+    font-family:'Manrope',sans-serif;
+    background:var(--fondo);
+    color:var(--texto);
+    display:flex;flex-direction:column;
+    overflow:hidden;position:relative;
+  }
+
+  /* ---------- Mapa ---------- */
+  .map-wrap{position:relative;flex:1;overflow:hidden;background:#e8eef6}
+  svg.map{position:absolute;inset:0;width:100%;height:100%}
+
+  /* hint flotante */
+  .hint{
+    position:absolute;top:14px;left:50%;transform:translateX(-50%);
+    z-index:22;background:rgba(35,50,73,.92);color:#fff;backdrop-filter:blur(6px);
+    padding:9px 16px;border-radius:20px;font-size:12px;font-weight:700;
+    display:flex;align-items:center;gap:8px;box-shadow:0 8px 22px -8px rgba(0,0,0,.4);
+    max-width:90%;text-align:center;transition:opacity .35s, transform .35s;
+  }
+  .hint .pulse{width:8px;height:8px;border-radius:50%;background:var(--aqua-soft);animation:pulse 1.5s infinite;flex-shrink:0}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(81,194,202,.6)}70%{box-shadow:0 0 0 8px rgba(81,194,202,0)}100%{box-shadow:0 0 0 0 rgba(81,194,202,0)}}
+
+  /* ---------- Pins ---------- */
+  .pin{
+    position:absolute;transform:translate(-50%,-100%);z-index:15;cursor:pointer;
+    animation:drop .5s cubic-bezier(.18,.89,.32,1.28) both;
+    transition:transform .2s;
+  }
+  .pin:active{transform:translate(-50%,-100%) scale(.9)}
+  @keyframes drop{0%{opacity:0;transform:translate(-50%,-150%) scale(.4)}100%{opacity:1;transform:translate(-50%,-100%) scale(1)}}
+  .pin .body{width:54px;height:64px;position:relative;filter:drop-shadow(0 6px 9px rgba(2,28,138,.32))}
+  .pin .teardrop{position:absolute;inset:0}
+  .pin .ico{position:absolute;top:6px;left:50%;transform:translateX(-50%);width:36px;height:36px}
+  .pin .halo{position:absolute;top:50%;left:50%;width:54px;height:54px;border-radius:50%;transform:translate(-50%,-58%);z-index:-1}
+  .pin.unconfirmed{opacity:.6;animation:drop .5s both, breathe 1.8s ease-in-out infinite .5s}
+  @keyframes breathe{0%,100%{opacity:.5}50%{opacity:.8}}
+  .pin.confirmed .halo{background:radial-gradient(circle,rgba(224,84,74,.35),transparent 70%);animation:ripple 1.8s infinite}
+  .pin.essbio .halo{background:radial-gradient(circle,rgba(14,159,190,.42),transparent 70%);animation:ripple 1.8s infinite}
+  .pin.resolved .halo{background:radial-gradient(circle,rgba(30,155,107,.42),transparent 70%)}
+  @keyframes ripple{0%{transform:translate(-50%,-58%) scale(.55);opacity:.9}100%{transform:translate(-50%,-58%) scale(1.7);opacity:0}}
+
+  .conf-badge{
+    position:absolute;top:-4px;right:-6px;background:#fff;border:1.5px solid var(--rojo);
+    color:var(--rojo);font-size:10px;font-weight:800;border-radius:11px;padding:1px 6px;
+    font-family:'Sora',sans-serif;box-shadow:0 2px 6px rgba(0,0,0,.18);z-index:3;
+  }
+  .conf-badge.green{border-color:var(--ahorro);color:var(--ahorro)}
+  .check-badge{
+    position:absolute;top:-4px;right:-6px;width:20px;height:20px;border-radius:50%;
+    background:var(--ahorro);display:flex;align-items:center;justify-content:center;z-index:3;
+    box-shadow:0 2px 6px rgba(0,0,0,.2);
+  }
+
+  /* ---------- Bottom sheet detalle ---------- */
+  .sheet{
+    position:absolute;left:0;right:0;bottom:0;z-index:30;
+    background:var(--superficie);border-top-left-radius:26px;border-top-right-radius:26px;
+    box-shadow:0 -12px 40px -8px rgba(2,28,138,.25);
+    padding:10px 20px 24px;
+    transform:translateY(110%);transition:transform .5s cubic-bezier(.16,1,.3,1);
+    max-height:78%;overflow-y:auto;
+  }
+  .sheet.show{transform:translateY(0)}
+  .grab{width:42px;height:5px;border-radius:3px;background:var(--borde);margin:6px auto 14px}
+  .close-x{position:absolute;top:16px;right:18px;width:30px;height:30px;border-radius:50%;background:var(--fondo);border:1px solid var(--borde);display:flex;align-items:center;justify-content:center;cursor:pointer}
+
+  .sheet-head{display:flex;align-items:center;gap:13px;margin-bottom:6px}
+  .sheet-ico{width:54px;height:54px;border-radius:15px;display:flex;align-items:center;justify-content:center;flex-shrink:0;padding:6px}
+  .sheet-ico svg{width:100%;height:100%}
+  .sheet-title{font-family:'Sora',sans-serif;font-weight:700;font-size:18px;color:var(--texto);line-height:1.2}
+  .sheet-meta{font-size:11.5px;color:var(--texto-suave);font-weight:600;margin-top:3px;display:flex;align-items:center;gap:5px}
+
+  /* track */
+  .status-track{display:flex;align-items:flex-start;margin:20px 2px 8px}
+  .step{display:flex;flex-direction:column;align-items:center;flex:1;position:relative}
+  .step .dot{width:30px;height:30px;border-radius:50%;background:#fff;border:2.5px solid var(--borde);display:flex;align-items:center;justify-content:center;z-index:2;transition:all .4s}
+  .step .dot svg{width:15px;height:15px}
+  .step .slabel{font-size:9.5px;font-weight:700;color:var(--texto-suave);margin-top:7px;text-align:center;line-height:1.15;letter-spacing:.01em;max-width:62px}
+  .step .bar{position:absolute;top:15px;left:50%;width:100%;height:3px;background:var(--borde);z-index:1;transition:background .5s}
+  .step:last-child .bar{display:none}
+  .step.done .dot{background:var(--ahorro);border-color:var(--ahorro)}
+  .step.done .dot svg path,.step.done .dot svg circle{stroke:#fff}
+  .step.done .bar{background:var(--ahorro)}
+  .step.active .dot{border-color:var(--aqua);background:var(--aqua);box-shadow:0 0 0 6px rgba(14,159,190,.16)}
+  .step.active .dot svg path,.step.active .dot svg circle{stroke:#fff}
+  .step.active .slabel{color:var(--aqua)}
+
+  /* banner essbio */
+  .essbio-banner{
+    background:linear-gradient(135deg,rgba(2,28,138,.06),rgba(14,159,190,.08));
+    border:1px solid rgba(14,159,190,.3);border-radius:16px;padding:14px 15px;
+    display:flex;gap:12px;align-items:flex-start;margin-top:14px;
+    opacity:0;max-height:0;overflow:hidden;transition:opacity .45s, max-height .45s, margin .45s;
+  }
+  .essbio-banner.show{opacity:1;max-height:160px}
+  .essbio-shield{width:36px;height:36px;border-radius:10px;background:var(--azul-grad);flex-shrink:0;display:flex;align-items:center;justify-content:center}
+  .essbio-banner .et{font-family:'Sora',sans-serif;font-weight:700;font-size:13px;color:var(--azul-essbio);margin-bottom:3px}
+  .essbio-banner .eb{font-size:11.5px;color:var(--texto);line-height:1.45}
+  .essbio-banner .src{font-size:9.5px;color:var(--texto-suave);font-weight:600;margin-top:6px;display:flex;align-items:center;gap:4px}
+
+  /* botón de acción dinámico */
+  .action-btn{
+    width:100%;margin-top:16px;padding:15px;border:none;border-radius:15px;
+    background:var(--azul-grad);color:#fff;font-family:'Sora',sans-serif;font-weight:700;font-size:14px;
+    cursor:pointer;transition:transform .2s, opacity .2s;display:flex;align-items:center;justify-content:center;gap:9px;
+    box-shadow:0 8px 20px -6px rgba(14,159,190,.5);
+  }
+  .action-btn:active{transform:scale(.97)}
+  .action-btn.ghost{background:#fff;color:var(--aqua);border:2px solid var(--aqua);box-shadow:none}
+  .action-btn.done{background:rgba(30,155,107,.12);color:var(--ahorro);box-shadow:none;cursor:default}
+  .action-hint{text-align:center;font-size:11px;color:var(--texto-suave);font-weight:600;margin-top:10px}
+
+  /* ---------- FAB ---------- */
+  .fab{
+    position:absolute;right:18px;bottom:24px;z-index:25;
+    height:56px;padding:0 20px;border-radius:18px;background:var(--azul-grad);
+    display:flex;align-items:center;gap:9px;color:#fff;font-family:'Sora',sans-serif;font-weight:700;font-size:14px;
+    box-shadow:0 12px 28px -6px rgba(14,159,190,.6);cursor:pointer;transition:transform .25s;
+  }
+  .fab:active{transform:scale(.94)}
+  .fab .ring{position:absolute;inset:0;border-radius:18px;border:2px solid var(--aqua-soft);animation:fabring 2.4s infinite}
+  @keyframes fabring{0%{transform:scale(1);opacity:.7}100%{transform:scale(1.25);opacity:0}}
+
+  /* ---------- Modal crear reporte ---------- */
+  .modal-bg{
+    position:absolute;inset:0;z-index:40;background:rgba(12,20,38,.45);backdrop-filter:blur(3px);
+    display:flex;align-items:flex-end;opacity:0;pointer-events:none;transition:opacity .35s;
+  }
+  .modal-bg.show{opacity:1;pointer-events:auto}
+  .modal{
+    width:100%;background:var(--superficie);border-top-left-radius:26px;border-top-right-radius:26px;
+    padding:10px 20px 26px;transform:translateY(100%);transition:transform .45s cubic-bezier(.16,1,.3,1);
+  }
+  .modal-bg.show .modal{transform:translateY(0)}
+  .modal h3{font-family:'Sora',sans-serif;font-size:17px;color:var(--texto);margin:6px 0 4px}
+  .modal p{font-size:12px;color:var(--texto-suave);font-weight:600;margin-bottom:16px}
+  .type-grid{display:flex;flex-direction:column;gap:10px}
+  .type-card{
+    display:flex;align-items:center;gap:13px;padding:12px;border:1.5px solid var(--borde);border-radius:16px;
+    cursor:pointer;transition:all .2s;background:#fff;
+  }
+  .type-card:active{transform:scale(.98)}
+  .type-card:hover{border-color:var(--aqua);background:var(--fondo)}
+  .type-card .tc-ico{width:46px;height:46px;border-radius:12px;display:flex;align-items:center;justify-content:center;flex-shrink:0;padding:5px}
+  .type-card .tc-ico svg{width:100%;height:100%}
+  .type-card .tc-name{font-family:'Sora',sans-serif;font-weight:700;font-size:14px;color:var(--texto)}
+  .type-card .tc-desc{font-size:10.5px;color:var(--texto-suave);font-weight:600;margin-top:1px}
+  .type-card .tc-arrow{margin-left:auto;color:var(--texto-suave)}
+
+  /* toast */
+  .toast{
+    position:absolute;top:64px;left:50%;transform:translateX(-50%) translateY(-20px);
+    z-index:55;background:var(--texto);color:#fff;padding:11px 18px;border-radius:14px;
+    font-size:12px;font-weight:700;display:flex;align-items:center;gap:8px;
+    box-shadow:0 10px 30px -6px rgba(0,0,0,.4);opacity:0;transition:all .4s;white-space:nowrap;
+  }
+
+  /* ====================== MODO OSCURO ====================== */
+  /* Se activa con html[data-theme="oscuro"], sincronizado desde la app. */
+  html[data-theme="oscuro"]{
+    --texto:#E8EEF7;
+    --texto-suave:#AEBBCF;
+    --superficie:#16213A;
+    --fondo:#0C1426;
+    --borde:#2A3852;
+  }
+  /* Mapa */
+  html[data-theme="oscuro"] .map-wrap{background:#0F1A30}
+  html[data-theme="oscuro"] svg.map rect[fill="#e8eef6"]{fill:#0F1A30}
+  html[data-theme="oscuro"] svg.map pattern path{stroke:#243250}
+  html[data-theme="oscuro"] svg.map [fill="#dbe8df"]{fill:#1B2A44}
+  html[data-theme="oscuro"] svg.map g[stroke="#fff"]{stroke:#27374f}
+  html[data-theme="oscuro"] svg.map g[stroke="#eef3f8"]{stroke:#1C2B45}
+  html[data-theme="oscuro"] svg.map path[stroke="#bfe3ea"]{stroke:#3a818f;opacity:.4}
+  /* Componentes con blanco fijo */
+  html[data-theme="oscuro"] .step .dot{background:#233249}
+  html[data-theme="oscuro"] .type-card{background:var(--superficie)}
+  html[data-theme="oscuro"] .action-btn.ghost{background:var(--superficie)}
+  html[data-theme="oscuro"] .conf-badge{background:#16213A}
+  html[data-theme="oscuro"] .essbio-banner .et{color:var(--aqua-soft)}
+  html[data-theme="oscuro"] .toast{background:#27374f}
+  /* sombras más suaves sobre fondo oscuro */
+  html[data-theme="oscuro"] .sheet{box-shadow:0 -12px 40px -8px rgba(0,0,0,.55)}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+</style>
+<script>
+  /* Sincroniza el tema con la app contenedora (claro/oscuro). */
+  (function(){
+    function apply(t){
+      document.documentElement.setAttribute('data-theme', t === 'oscuro' ? 'oscuro' : 'claro');
+    }
+    // 1) tema inicial vía parámetro de URL (?theme=oscuro)
+    var p = new URLSearchParams(location.search).get('theme');
+    apply(p || 'claro');
+    // 2) cambios en vivo desde la app
+    window.addEventListener('message', function(e){
+      if (!e.data) return;
+      if (e.data.type === 'aqua-theme') apply(e.data.mode);
+      // 3) safe-area: el iframe no hereda env(safe-area-inset-top); la app
+      //    nos pasa la medida para que el hint no quede bajo el notch.
+      if (e.data.type === 'aqua-insets'){
+        var hint = document.getElementById('hint');
+        if (hint) hint.style.top = Math.max(14, (e.data.top || 0) + 10) + 'px';
+      }
+    });
+  })();
+</script>
+</head>
+<body>
+  <div class="map-wrap" id="mapWrap">
+    <svg class="map" viewBox="0 0 390 700" preserveAspectRatio="xMidYMid slice">
+      <defs>
+        <linearGradient id="river" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#7ec5d6"/><stop offset="1" stop-color="#51C2CA"/>
+        </linearGradient>
+        <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+          <path d="M40 0H0V40" fill="none" stroke="#d4dde8" stroke-width="1"/>
+        </pattern>
+      </defs>
+      <rect width="390" height="700" fill="#e8eef6"/>
+      <rect width="390" height="700" fill="url(#grid)"/>
+      <rect x="30" y="90" width="80" height="60" rx="8" fill="#dbe8df"/>
+      <rect x="250" y="230" width="100" height="80" rx="8" fill="#dbe8df"/>
+      <rect x="60" y="470" width="90" height="70" rx="8" fill="#dbe8df"/>
+      <rect x="240" y="540" width="110" height="70" rx="8" fill="#dbe8df"/>
+      <path d="M-20 150 C 80 200, 60 300, 150 350 S 280 450, 250 570 S 320 660, 420 640"
+            stroke="url(#river)" stroke-width="36" fill="none" stroke-linecap="round" opacity=".85"/>
+      <path d="M-20 150 C 80 200, 60 300, 150 350 S 280 450, 250 570 S 320 660, 420 640"
+            stroke="#bfe3ea" stroke-width="15" fill="none" stroke-linecap="round" opacity=".6"/>
+      <g stroke="#fff" stroke-width="9" stroke-linecap="round">
+        <line x1="0" y1="250" x2="390" y2="200"/>
+        <line x1="40" y1="0" x2="120" y2="700"/>
+        <line x1="0" y1="540" x2="390" y2="500"/>
+        <line x1="300" y1="0" x2="340" y2="700"/>
+      </g>
+      <g stroke="#eef3f8" stroke-width="4" stroke-linecap="round">
+        <line x1="0" y1="380" x2="390" y2="360"/>
+        <line x1="200" y1="0" x2="230" y2="700"/>
+      </g>
+    </svg>
+
+    <div class="hint" id="hint"><span class="pulse"></span><span id="hintTxt">Toca un reporte para ver su estado</span></div>
+    <div id="pins"></div>
+    <div class="toast" id="toast"></div>
+
+    <div class="fab" id="fab">
+      <div class="ring"></div>
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/></svg>
+      Reportar
+    </div>
+
+    <!-- sheet -->
+    <div class="sheet" id="sheet">
+      <div class="grab"></div>
+      <div class="close-x" id="closeSheet"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="#5E7088" stroke-width="2.2" stroke-linecap="round"/></svg></div>
+      <div class="sheet-head">
+        <div class="sheet-ico" id="sheetIco"></div>
+        <div>
+          <div class="sheet-title" id="sheetTitle"></div>
+          <div class="sheet-meta" id="sheetMeta"></div>
+        </div>
+      </div>
+
+      <div class="status-track" id="track">
+        <div class="step" data-s="0"><div class="dot"><svg viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke="#5E7088" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="slabel">Reportado</div><div class="bar"></div></div>
+        <div class="step" data-s="1"><div class="dot"><svg viewBox="0 0 24 24" fill="none"><path d="M16 11a4 4 0 1 0-8 0M4 20a8 8 0 0 1 16 0" stroke="#5E7088" stroke-width="2.2" stroke-linecap="round"/></svg></div><div class="slabel">Confirmado comunidad</div><div class="bar"></div></div>
+        <div class="step" data-s="2"><div class="dot"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7l8-4Z" stroke="#5E7088" stroke-width="2.2" stroke-linejoin="round"/></svg></div><div class="slabel">En gestión Essbio</div><div class="bar"></div></div>
+        <div class="step" data-s="3"><div class="dot"><svg viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke="#5E7088" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="slabel">Resuelto</div><div class="bar"></div></div>
+      </div>
+
+      <div class="essbio-banner" id="banner">
+        <div class="essbio-shield">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7l8-4Z" fill="#fff"/><path d="M9 12l2 2 4-4" stroke="#0E9FBE" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <div>
+          <div class="et" id="bannerTitle"></div>
+          <div class="eb" id="bannerBody"></div>
+          <div class="src">★ Datos provistos por Essbio · vía Essbio Mide</div>
+        </div>
+      </div>
+
+      <button class="action-btn" id="actionBtn"></button>
+      <div class="action-hint" id="actionHint"></div>
+    </div>
+
+    <!-- modal crear -->
+    <div class="modal-bg" id="modalBg">
+      <div class="modal">
+        <div class="grab"></div>
+        <h3>¿Qué quieres reportar?</h3>
+        <p>Tu reporte se ubicará con tu ubicación actual</p>
+        <div class="type-grid" id="typeGrid"></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+/* ===== Iconos SVG planos (reconstruidos desde los PNG) ===== */
+const ICONS = {
+  fuga: `<svg viewBox="0 0 64 64" fill="none">
+    <rect x="6" y="16" width="10" height="20" rx="2" fill="#5B9BD5"/>
+    <rect x="48" y="16" width="10" height="20" rx="2" fill="#5B9BD5"/>
+    <rect x="14" y="19" width="18" height="14" rx="2" fill="#6BA6DE"/>
+    <rect x="32" y="19" width="18" height="14" rx="2" fill="#6BA6DE"/>
+    <path d="M32 19l-3 5 4 4-3 5" stroke="#3B6FA8" stroke-width="2.4" fill="none" stroke-linejoin="round"/>
+    <path d="M32 40c-3 4-5 6.5-5 9a5 5 0 0 0 10 0c0-2.5-2-5-5-9Z" fill="#CDE8F7" stroke="#5B9BD5" stroke-width="1.6"/>
+    <g stroke="#9CD0EC" stroke-width="2.6" stroke-linecap="round"><line x1="42" y1="40" x2="47" y2="36"/><line x1="44" y1="45" x2="50" y2="42"/></g>
+    <ellipse cx="32" cy="56" rx="17" ry="5" fill="#CDE8F7" stroke="#5B9BD5" stroke-width="1.6"/>
+  </svg>`,
+  rebalse: `<svg viewBox="0 0 64 64" fill="none">
+    <ellipse cx="32" cy="16" rx="18" ry="7" fill="#B7C0C9" stroke="#5E6B78" stroke-width="1.6"/>
+    <ellipse cx="32" cy="14" rx="18" ry="7" fill="#CBD3DA" stroke="#5E6B78" stroke-width="1.4"/>
+    <g stroke="#9AA6B2" stroke-width="1" opacity=".8"><line x1="20" y1="12" x2="44" y2="12"/><line x1="22" y1="16" x2="42" y2="16"/><line x1="28" y1="9" x2="28" y2="19"/><line x1="36" y1="9" x2="36" y2="19"/></g>
+    <path d="M26 21c-2 6-2 14 4 20 4 4 3 9 3 13l8 4c0-6 1-11-2-16-3-5-4-12-2-19Z" fill="#5BB0D8"/>
+    <path d="M27 22c-1 6 0 13 5 18" stroke="#8FD3EC" stroke-width="2" fill="none" stroke-linecap="round"/>
+    <ellipse cx="34" cy="56" rx="20" ry="6" fill="#6BC0E0" stroke="#3E8CB5" stroke-width="1.6"/>
+  </svg>`,
+  grifo: `<svg viewBox="0 0 64 64" fill="none">
+    <rect x="22" y="50" width="20" height="9" rx="2" fill="#F2B829" stroke="#1F3247" stroke-width="1.6"/>
+    <path d="M26 24c0-3 2.7-5 6-5s6 2 6 5v26H26V24Z" fill="#FBC52E" stroke="#1F3247" stroke-width="1.6"/>
+    <path d="M25 12c0-3 3.1-5 7-5s7 2 7 5v6H25v-6Z" fill="#FBC52E" stroke="#1F3247" stroke-width="1.6"/>
+    <rect x="23" y="17" width="18" height="6" rx="2" fill="#F2B829" stroke="#1F3247" stroke-width="1.6"/>
+    <circle cx="32" cy="32" r="5" fill="#F2B829" stroke="#1F3247" stroke-width="1.6"/>
+    <circle cx="32" cy="32" r="1.8" fill="#FBC52E" stroke="#1F3247" stroke-width="1.2"/>
+    <rect x="41" y="28" width="6" height="6" rx="1.5" fill="#FBC52E" stroke="#1F3247" stroke-width="1.4"/>
+    <rect x="22" y="37" width="20" height="5" rx="1.5" fill="#F2B829" stroke="#1F3247" stroke-width="1.4"/>
+  </svg>`
+};
+
+/* color del pin (teardrop) por tipo */
+const TYPES = {
+  fuga:    {name:'Fuga en vía pública',        color:'#E0544A', addr:'Av. Los Carrera 1240',        desc:'Agua corriendo en calle o vereda'},
+  rebalse: {name:'Rebalse de aguas servidas',  color:'#8B5E3C', addr:'Pasaje El Sauce 332',          desc:'Cámara de alcantarillado rebalsada'},
+  grifo:   {name:'Grifo / hidrante dañado',    color:'#C7392F', addr:'Esq. Freire con Colo Colo',    desc:'Grifo con pérdida o daño visible'}
+};
+
+const STAGE = [
+  {step:0, banner:null,
+    btn:'Confirmar que veo esto también', cls:'ghost',
+    hint:'Eres el 1er vecino. Faltan confirmaciones para escalar a Essbio.',
+    toast:['Reporte creado','#E0544A']},
+  {step:1, banner:null,
+    btn:'Sumar mi confirmación (2 de 3)', cls:'ghost',
+    hint:'2 de 3 confirmaciones. Una más y se avisa a Essbio.',
+    toast:['Confirmación registrada','#E0544A']},
+  {step:1, banner:'escalado',
+    btn:'Ver gestión de Essbio', cls:'',
+    hint:'3 confirmaciones alcanzadas · reporte escalado automáticamente.',
+    toast:['3 de 3 · escalando a Essbio','#0E9FBE'], badge:'green'},
+  {step:2, banner:'terreno',
+    btn:'Marcar como resuelto', cls:'',
+    hint:'Una cuadrilla fue despachada por Essbio.',
+    toast:['Cuadrilla Essbio en terreno','#0E9FBE'], pin:'essbio'},
+  {step:3, banner:'resuelto',
+    btn:'Listo · reporte cerrado', cls:'done',
+    hint:'Gracias por cuidar el agua de tu comunidad.',
+    toast:['Reparación completada','#1E9B6B'], pin:'resolved', check:true}
+];
+
+const BANNERS = {
+  escalado:{t:'Essbio ha recibido el reporte',b:'Essbio está evaluando esta situación. Gracias por reportar a tu comunidad.'},
+  terreno:{t:'Cuadrilla en terreno',b:'Una cuadrilla de Essbio está atendiendo esta situación. Te avisaremos cuando esté resuelta.'},
+  resuelto:{t:'Reparación completada',b:'Gracias a los vecinos que reportaron: juntos evitamos la pérdida de agua.'}
+};
+
+/* posiciones iniciales de reportes ya existentes en el mapa */
+const SPOTS = [
+  {id:'a', type:'fuga',    x:46, y:42, stage:0},
+  {id:'b', type:'rebalse', x:72, y:32, stage:2},
+  {id:'c', type:'grifo',   x:30, y:62, stage:3}
+];
+
+/* ===== Persistencia local: los reportes sobreviven al cerrar la app ===== */
+const SAVE_KEY='aquareward.reportes.v1';
+let nid=0;
+(function(){
+  try{
+    const raw=localStorage.getItem(SAVE_KEY);
+    if(raw){
+      const saved=JSON.parse(raw);
+      if(saved && Array.isArray(saved.spots) && saved.spots.length){
+        SPOTS.length=0;
+        saved.spots.forEach(s=>{ if(TYPES[s.type]) SPOTS.push(s); });
+        nid=saved.nid|0;
+      }
+    }
+  }catch(e){/* almacenamiento no disponible: sesión en memoria */}
+})();
+function persistSpots(){
+  try{localStorage.setItem(SAVE_KEY,JSON.stringify({spots:SPOTS,nid}))}catch(e){}
+}
+
+const pinsEl=document.getElementById('pins');
+const sheet=document.getElementById('sheet');
+const toast=document.getElementById('toast');
+const banner=document.getElementById('banner');
+const hint=document.getElementById('hint');
+let current=null;
+
+function pinHTML(s){
+  const t=TYPES[s.type];
+  let badge='';
+  if(s.stage>=4) badge=`<div class="check-badge"><svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></div>`;
+  else if(s.stage>=2) badge=`<div class="conf-badge green">3/3</div>`;
+  else badge=`<div class="conf-badge">${s.stage+1}/3</div>`;
+  let cls='unconfirmed';
+  if(s.stage>=4) cls='resolved'; else if(s.stage>=2) cls='essbio'; else if(s.stage>=1) cls='confirmed';
+  return `<div class="body">
+      <svg class="teardrop" viewBox="0 0 54 64"><path d="M27 0C12.6 0 1 11.6 1 26c0 17 26 38 26 38s26-21 26-38C53 11.6 41.4 0 27 0Z" fill="${t.color}"/><circle cx="27" cy="25" r="19" fill="#fff"/></svg>
+      <div class="ico">${ICONS[s.type]}</div>
+      ${badge}
+      <div class="halo"></div>
+    </div>`;
+}
+
+function renderPins(){
+  pinsEl.innerHTML='';
+  SPOTS.forEach(s=>{
+    const p=document.createElement('div');
+    let cls='pin';
+    if(s.stage>=4) cls+=' resolved'; else if(s.stage>=2) cls+=' essbio'; else if(s.stage>=1) cls+=' confirmed'; else cls+=' unconfirmed';
+    p.className=cls;
+    p.style.left=s.x+'%'; p.style.top=s.y+'%';
+    p.innerHTML=pinHTML(s);
+    p.onclick=()=>openSheet(s);
+    pinsEl.appendChild(p);
+  });
+}
+
+function showToast(txt,color){
+  toast.innerHTML=`<span style="width:8px;height:8px;border-radius:50%;background:${color};display:inline-block"></span>${txt}`;
+  toast.classList.add('show');
+  clearTimeout(showToast._t);
+  showToast._t=setTimeout(()=>toast.classList.remove('show'),2000);
+}
+
+function setSteps(stg){
+  // stg = stage actual; el "step" lógico viene de STAGE
+  const logical = STAGE[stg].step;
+  document.querySelectorAll('.step').forEach((s,i)=>{
+    s.classList.remove('done','active');
+    if(i<logical) s.classList.add('done');
+    else if(i===logical) s.classList.add('active');
+  });
+  // si está resuelto, marcar todo done
+  if(stg>=4){document.querySelectorAll('.step').forEach(s=>s.classList.add('done'));}
+}
+
+function paintSheet(s){
+  const t=TYPES[s.type];
+  document.getElementById('sheetIco').style.background=t.color+'1A';
+  document.getElementById('sheetIco').innerHTML=ICONS[s.type];
+  document.getElementById('sheetTitle').textContent=t.name;
+  document.getElementById('sheetMeta').innerHTML=
+    `<svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M12 21s7-6.6 7-12a7 7 0 1 0-14 0c0 5.4 7 12 7 12Z" stroke="#5E7088" stroke-width="1.6"/><circle cx="12" cy="9" r="2.4" stroke="#5E7088" stroke-width="1.6"/></svg>${t.addr} · hace 4 min`;
+
+  const cfg=STAGE[s.stage];
+  setSteps(s.stage);
+
+  if(cfg.banner){
+    banner.classList.add('show');
+    document.getElementById('bannerTitle').textContent=BANNERS[cfg.banner].t;
+    document.getElementById('bannerBody').textContent=BANNERS[cfg.banner].b;
+  }else{
+    banner.classList.remove('show');
+  }
+
+  const btn=document.getElementById('actionBtn');
+  btn.className='action-btn '+(cfg.cls||'');
+  btn.textContent=cfg.btn;
+  document.getElementById('actionHint').textContent=cfg.hint;
+  btn.onclick=()=>advance(s);
+}
+
+function openSheet(s){
+  current=s;
+  paintSheet(s);
+  sheet.classList.add('show');
+  hint.style.opacity='0';
+}
+function closeSheet(){sheet.classList.remove('show');hint.style.opacity='1';current=null;}
+
+function advance(s){
+  if(s.stage>=STAGE.length-1) return; // ya resuelto
+  s.stage++;
+  const cfg=STAGE[s.stage];
+  if(cfg.toast) showToast(cfg.toast[0],cfg.toast[1]);
+  renderPins();
+  paintSheet(s);
+  persistSpots();
+}
+
+document.getElementById('closeSheet').onclick=closeSheet;
+
+/* ---- modal crear reporte ---- */
+const modalBg=document.getElementById('modalBg');
+const typeGrid=document.getElementById('typeGrid');
+function buildModal(){
+  typeGrid.innerHTML='';
+  Object.keys(TYPES).forEach(k=>{
+    const t=TYPES[k];
+    const c=document.createElement('div');
+    c.className='type-card';
+    c.innerHTML=`<div class="tc-ico" style="background:${t.color}1A">${ICONS[k]}</div>
+      <div><div class="tc-name">${t.name}</div><div class="tc-desc">${t.desc}</div></div>
+      <div class="tc-arrow"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>`;
+    c.onclick=()=>createReport(k);
+    typeGrid.appendChild(c);
+  });
+}
+document.getElementById('fab').onclick=()=>{modalBg.classList.add('show')};
+modalBg.onclick=(e)=>{if(e.target===modalBg)modalBg.classList.remove('show')};
+
+function createReport(type){
+  modalBg.classList.remove('show');
+  // ubica un nuevo pin cerca del centro
+  const ns={id:'n'+(nid++), type, x:50+(Math.random()*16-8), y:50+(Math.random()*14-7), stage:0};
+  SPOTS.push(ns);
+  renderPins();
+  showToast('Reporte creado · tú eres el 1er vecino', TYPES[type].color);
+  persistSpots();
+  setTimeout(()=>openSheet(ns),350);
+}
+
+buildModal();
+renderPins();
+</script>
+</body>
+</html>

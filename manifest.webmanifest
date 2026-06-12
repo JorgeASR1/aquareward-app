@@ -1,0 +1,17 @@
+{
+  "name": "AquaReward — Conservación del agua",
+  "short_name": "AquaReward",
+  "description": "Gana AquaCoins por ahorrar agua. Canjea premios, dona a proyectos rurales y reporta fugas en tu comunidad. Región del Biobío, Chile.",
+  "lang": "es",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#FBFDFE",
+  "theme_color": "#0E9FBE",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

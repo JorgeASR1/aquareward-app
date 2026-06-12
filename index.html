@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no"/>
+<title>AquaReward</title>
+<meta name="description" content="Gana AquaCoins por ahorrar agua. Canjea premios, dona a proyectos rurales y reporta fugas en tu comunidad. Región del Biobío."/>
+
+<!-- PWA -->
+<link rel="manifest" href="manifest.webmanifest"/>
+<meta name="theme-color" content="#FBFDFE"/>
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0C1426"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="AquaReward"/>
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png"/>
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png"/>
+
+<!-- Tipografías (cacheadas offline por el service worker tras la primera carga) -->
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700;800&family=Oswald:wght@400;500;600;700&display=swap"/>
+
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    overscroll-behavior: none;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    background: #F4F8FB;
+    font-family: "Geist", ui-sans-serif, -apple-system, system-ui, sans-serif;
+    -webkit-user-select: none; user-select: none;
+    touch-action: manipulation;
+    position: fixed; inset: 0; /* evita el rebote de scroll del body en iOS */
+  }
+  #root, #app-host { height: 100%; }
+  #app-host { width: 100%; max-width: 100%; margin: 0 auto; height: 100%; }
+
+  /* En pantallas anchas (escritorio) la app se ve como columna móvil centrada */
+  @media (min-width: 560px) {
+    body { background: #E3E9EE; position: static; }
+    #app-host {
+      max-width: 430px; height: 100dvh;
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.08), 0 30px 80px rgba(0,0,0,0.18);
+    }
+  }
+
+  @keyframes ar-fade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  .ar-fade { animation: ar-fade 360ms cubic-bezier(.2,.7,.2,1) both; }
+  .ar-screen * { font-feature-settings: 'ss01','cv11','tnum'; }
+  .ar-screen::-webkit-scrollbar { display: none; }
+  .ar-screen { scrollbar-width: none; }
+
+  .ar-toast { transform: translateX(-50%); animation: ar-toast-in 350ms cubic-bezier(.2,.8,.2,1) both; }
+  @keyframes ar-toast-in {
+    from { opacity: 0; transform: translateX(-50%) translateY(-12px); }
+    to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+  }
+
+  button { -webkit-tap-highlight-color: transparent; }
+  button:active { opacity: 0.85; }
+</style>
+</head>
+<body>
+  <!-- sonda para medir env(safe-area-inset-top) y pasarla al iframe del mapa -->
+  <div id="sat-probe" style="position:fixed;top:0;left:0;width:0;height:env(safe-area-inset-top,0px);visibility:hidden;pointer-events:none"></div>
+
+  <div id="app-host"><div id="root" style="height:100%"></div></div>
+
+  <script src="vendor/react.production.min.js"></script>
+  <script src="vendor/react-dom.production.min.js"></script>
+  <script src="app.js"></script>
+  <script>
+    if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
+      addEventListener('load', function () {
+        navigator.serviceWorker.register('./sw.js').catch(function () {});
+      });
+    }
+  </script>
+  <noscript>AquaReward necesita JavaScript para funcionar.</noscript>
+</body>
+</html>
