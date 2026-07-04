@@ -144,20 +144,28 @@ const Icon = {
 
 // ───────── Estado persistente ─────────
 const STORE_KEY = 'aquareward.v1';
-const PROJECT_GOAL = 200000; // AC
 const CLP_PER_M3 = 1180; // tarifa referencial Essbio
 const M3_TO_AC = 100; // equivalencia para la barra del proyecto
 const DAY = 86400000;
 
+// Proyectos comunitarios — en Comunidad se desliza entre tarjetas
+const PROJECTS = [
+{ id: 'sb', title: 'Red agua potable rural', loc: 'Santa Bárbara', fam: '84 familias', img: 'assets/tubul-rural.jpg', goal: 200000, days: 23 },
+{ id: 'cb', title: 'Estanques de acumulación', loc: 'Cabrero', fam: '52 familias', img: 'assets/cabrero-rural.jpg', goal: 150000, days: 45 }];
+
+
 function freshState() {
   return {
-    v: 1,
+    v: 2,
+    userName: '', // '' → aún sin registrar (pantalla de bienvenida)
+    seniorMode: false, // modo fácil para adultos mayores
+    tutorialsSeen: {}, // { inicio: true, ... } mini tutoriales por pantalla
     balance: 1240,
     redemptions: [], // { id, title, cost, ts }
-    projectFunded: 134000,
-    donors: 312,
-    myAC: 0, // total AC donados por el usuario
-    myCLP: 0, // total $ donados por el usuario
+    projects: {
+      sb: { funded: 134000, donors: 312, myAC: 0, myCLP: 0 },
+      cb: { funded: 61000, donors: 147, myAC: 0, myCLP: 0 }
+    },
     multiplierUntil: 0,
     tipIndex: 0
   };
@@ -168,14 +176,61 @@ function loadState() {
     const raw = localStorage.getItem(STORE_KEY);
     if (raw) {
       const s = JSON.parse(raw);
-      if (s && s.v === 1) return { ...freshState(), ...s };
+      if (s && s.v === 2) {
+        const f = freshState();
+        return { ...f, ...s, projects: { ...f.projects, ...(s.projects || {}) } };
+      }
+      if (s && s.v === 1) {
+        // migración v1 → v2: el proyecto único pasa a ser "Santa Bárbara"
+        const f = freshState();
+        return {
+          ...f,
+          balance: typeof s.balance === 'number' ? s.balance : f.balance,
+          redemptions: s.redemptions || [],
+          multiplierUntil: s.multiplierUntil || 0,
+          tipIndex: s.tipIndex || 0,
+          projects: {
+            ...f.projects,
+            sb: {
+              funded: typeof s.projectFunded === 'number' ? s.projectFunded : f.projects.sb.funded,
+              donors: typeof s.donors === 'number' ? s.donors : f.projects.sb.donors,
+              myAC: s.myAC || 0,
+              myCLP: s.myCLP || 0
+            }
+          }
+        };
+      }
     }
   } catch (e) {/* almacenamiento no disponible: la app funciona en memoria */}
   return freshState();
 }
 
+function donateTo(s, pid, acAmount, clpAmount) {
+  const p = s.projects[pid];
+  const proj = PROJECTS.find((x) => x.id === pid);
+  if (!p || !proj) return s;
+  return {
+    ...s.projects,
+    [pid]: {
+      ...p,
+      funded: Math.min(proj.goal, p.funded + acAmount),
+      donors: p.donors + (p.myAC || p.myCLP ? 0 : 1),
+      myAC: p.myAC + (clpAmount ? 0 : acAmount),
+      myCLP: p.myCLP + clpAmount
+    }
+  };
+}
+
 function reducer(s, a) {
   switch (a.type) {
+    case 'setName':
+      return { ...s, userName: String(a.name || '').trim().slice(0, 24) };
+    case 'setSenior':
+      return { ...s, seniorMode: !!a.on };
+    case 'tutorialSeen':
+      return { ...s, tutorialsSeen: { ...s.tutorialsSeen, [a.screen]: true } };
+    case 'resetTutorials':
+      return { ...s, tutorialsSeen: {} };
     case 'redeem': {
       const r = a.reward;
       if (s.balance < r.cost) return s;
@@ -192,17 +247,13 @@ function reducer(s, a) {
       return {
         ...s,
         balance: s.balance - a.amount,
-        projectFunded: Math.min(PROJECT_GOAL, s.projectFunded + a.amount),
-        donors: s.donors + (s.myAC || s.myCLP ? 0 : 1),
-        myAC: s.myAC + a.amount
+        projects: donateTo(s, a.pid, a.amount, 0)
       };
     }
     case 'donateM3': {
       return {
         ...s,
-        projectFunded: Math.min(PROJECT_GOAL, s.projectFunded + a.m3 * M3_TO_AC),
-        donors: s.donors + (s.myAC || s.myCLP ? 0 : 1),
-        myCLP: s.myCLP + a.m3 * CLP_PER_M3
+        projects: donateTo(s, a.pid, a.m3 * M3_TO_AC, a.m3 * CLP_PER_M3)
       };
     }
     case 'nextTip':
@@ -215,6 +266,10 @@ function reducer(s, a) {
 // ───────── Utilidades ─────────
 const fmtCL = (n) => Math.round(n).toLocaleString('es-CL');
 const NUMFONT = '"Oswald", "Geist", ui-sans-serif, sans-serif';
+const initials = (name) =>
+(name || '').trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase() || '·';
+const firstName = (name) => (name || '').trim().split(/\s+/)[0] || '';
+const logoSrc = (dark) => dark ? 'assets/logo-dark.png' : 'assets/logo-light.png';
 
 function useSystemDark() {
   const mq = React.useMemo(
@@ -405,7 +460,12 @@ const TIPS = [
 { t: 'Repara las llaves que gotean', d: 'Una llave goteando pierde hasta 46 L al día — más de 1.300 L al mes sin que lo notes.' },
 { t: 'Lava el auto con balde', d: 'Frente a la manguera, un balde ahorra cerca de 300 L por lavado. Tu auto queda igual de limpio.' },
 { t: 'Riega temprano o de noche', d: 'Evitas la evaporación del mediodía: la planta aprovecha más agua y tú usas menos.' },
-{ t: 'Usa cargas completas', d: 'Lavadora y lavavajillas con carga completa ahorran hasta 60 L por ciclo frente a cargas parciales.' }];
+{ t: 'Usa cargas completas', d: 'Lavadora y lavavajillas con carga completa ahorran hasta 60 L por ciclo frente a cargas parciales.' },
+{ t: 'Revisa el estanque del WC', d: 'Un WC con fuga silenciosa pierde hasta 200 L al día. Echa unas gotas de colorante al estanque: si llegan a la taza sin tirar la cadena, hay fuga.' },
+{ t: 'Instala aireadores en las llaves', d: 'Cuestan poco y mezclan aire con agua: reducen el consumo de cada llave hasta 40% sin que notes la diferencia.' },
+{ t: 'Reutiliza el agua de las verduras', d: 'El agua con que lavas frutas y verduras sirve perfecto para regar tus plantas. Júntala en un recipiente y dale una segunda vida.' },
+{ t: 'Descongela en el refrigerador', d: 'Descongelar alimentos bajo la llave gasta hasta 15 L por vez. Planifica y descongela en el refrigerador desde la noche anterior.' },
+{ t: 'Barre en vez de manguerear', d: 'Limpiar el patio o la vereda con escoba en vez de manguera ahorra unos 200 L cada vez. El resultado es el mismo.' }];
 
 
 function GaugeRing({ value = 8.7, max = 15, delta = -12, go = true }) {
@@ -461,7 +521,7 @@ function BalanceDisplay({ balance }) {
     </div>);
 }
 
-function ScreenInicio({ state, dispatch, goPremios }) {
+function ScreenInicio({ state, dispatch, goPremios, openProfile }) {
   const h = new Date().getHours();
   const greeting = h < 12 ? '¡Hola, buen día!' : h < 20 ? '¡Hola, buenas tardes!' : '¡Hola, buenas noches!';
   const now = new Date();
@@ -475,14 +535,15 @@ function ScreenInicio({ state, dispatch, goPremios }) {
     <div style={{ paddingBottom: 24 }}>
       <AppHeader
         subtitle={greeting}
-        title="Mati A."
+        title={state.userName}
         right={
-        <div style={{
-          width: 38, height: 38, borderRadius: 999,
+        <button onClick={() => { haptic(); openProfile(); }} aria-label="Tu perfil y ajustes" style={{
+          width: 40, height: 40, borderRadius: 999, border: 'none', cursor: 'pointer',
           background: `linear-gradient(135deg, ${COLORS.aqua}, ${COLORS.primary})`,
-          color: '#fff', fontWeight: 700, fontSize: 14,
-          display: 'flex', alignItems: 'center', justifyContent: 'center'
-        }}>MA</div>
+          color: '#fff', fontWeight: 700, fontSize: 14, fontFamily: 'inherit',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          boxShadow: '0 2px 10px rgba(14,159,190,0.35)'
+        }}>{initials(state.userName)}</button>
         } />
 
       {/* Tarjeta de saldo */}
@@ -839,41 +900,23 @@ function ImpactCounter({ target, go }) {
     <span style={{ fontFamily: NUMFONT, fontWeight: 600, fontSize: 56, letterSpacing: -1.6, lineHeight: 1 }}>{fmtCL(n)}</span>);
 }
 
-function ScreenComunidad({ state, dispatch, showToast, active }) {
+// Tarjeta de proyecto — cada una mantiene su propio selector de aporte
+function ProjectCard({ proj, pstate, balance, onConfirm }) {
   const [donMode, setDonMode] = React.useState('ac'); // 'ac' | 'm3'
   const [donAC, setDonAC] = React.useState(50);
   const [donM3, setDonM3] = React.useState(2);
-  const [confirming, setConfirming] = React.useState(false);
   const clp = (n) => n.toLocaleString('es-CL');
 
-  const funded = state.projectFunded;
-  const pct = Math.min(funded / PROJECT_GOAL, 1);
-  const complete = funded >= PROJECT_GOAL;
-  const canDonateAC = state.balance >= donAC;
-
-  const confirmDonation = () => {
-    haptic();
-    if (donMode === 'ac') {
-      if (!canDonateAC) return;
-      dispatch({ type: 'donateAC', amount: donAC });
-      showToast(`¡Gracias! Aportaste ${donAC} AC al proyecto`);
-    } else {
-      dispatch({ type: 'donateM3', m3: donM3 });
-      showToast(`¡Gracias! Aportaste $${clp(donM3 * CLP_PER_M3)} al proyecto`);
-    }
-    setConfirming(false);
-  };
+  const funded = pstate.funded;
+  const pct = Math.min(funded / proj.goal, 1);
+  const complete = funded >= proj.goal;
+  const canDonateAC = balance >= donAC;
 
   return (
-    <div style={{ paddingBottom: 24 }}>
-      <AppHeader subtitle="Tu impacto en la región" title="Comunidad" />
-
-      {/* Proyecto comunitario */}
-      <div style={{ padding: '0 16px 14px' }}>
         <Card style={{ padding: 0, overflow: 'hidden' }}>
           <div style={{
             height: 150, position: 'relative', overflow: 'hidden',
-            backgroundImage: 'url("assets/tubul-rural.jpg")',
+            backgroundImage: `url("${proj.img}")`,
             backgroundSize: 'cover', backgroundPosition: 'center 40%'
           }}>
             <div style={{
@@ -886,7 +929,7 @@ function ScreenComunidad({ state, dispatch, showToast, active }) {
               color: '#fff', fontSize: 11, fontWeight: 600,
               textShadow: '0 1px 4px rgba(0,0,0,0.5)'
             }}>
-              {Icon.pipe(18)} Santa Bárbara · Región del Biobío
+              {Icon.pipe(18)} {proj.loc} · Región del Biobío
             </div>
             <div style={{
               position: 'absolute', top: 12, left: 12,
@@ -906,9 +949,9 @@ function ScreenComunidad({ state, dispatch, showToast, active }) {
               Proyecto comunitario
             </div>
             <div style={{ fontSize: 17, fontWeight: 700, color: COLORS.ink, letterSpacing: -0.3, lineHeight: 1.25 }}>
-              Red agua potable rural
+              {proj.title}
             </div>
-            <div style={{ fontSize: 13, color: COLORS.inkSoft, marginTop: 2 }}>Santa Bárbara · 84 familias</div>
+            <div style={{ fontSize: 13, color: COLORS.inkSoft, marginTop: 2 }}>{proj.loc} · {proj.fam}</div>
 
             {/* progreso */}
             <div style={{ marginTop: 14 }}>
@@ -916,7 +959,7 @@ function ScreenComunidad({ state, dispatch, showToast, active }) {
                 <span style={{ fontSize: 13, fontWeight: 700, color: complete ? COLORS.good : COLORS.ink }}>
                   {complete ? '¡100% financiado!' : `${Math.round(pct * 100)}% financiado`}
                 </span>
-                <span style={{ fontSize: 12, color: COLORS.inkMuted, fontWeight: 600 }}>{fmtCL(funded)} / {fmtCL(PROJECT_GOAL)} AC</span>
+                <span style={{ fontSize: 12, color: COLORS.inkMuted, fontWeight: 600 }}>{fmtCL(funded)} / {fmtCL(proj.goal)} AC</span>
               </div>
               <div style={{ height: 10, borderRadius: 999, background: COLORS.divider, overflow: 'hidden', position: 'relative' }}>
                 <div style={{
@@ -932,16 +975,16 @@ function ScreenComunidad({ state, dispatch, showToast, active }) {
                 </div>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontSize: 11, color: COLORS.inkMuted }}>
-                <span><b style={{ color: COLORS.ink }}>{fmtCL(state.donors)}</b> donantes</span>
-                <span>Finaliza en <b style={{ color: COLORS.ink }}>23 días</b></span>
+                <span><b style={{ color: COLORS.ink }}>{fmtCL(pstate.donors)}</b> donantes</span>
+                <span>Finaliza en <b style={{ color: COLORS.ink }}>{proj.days} días</b></span>
               </div>
-              {(state.myAC > 0 || state.myCLP > 0) &&
+              {(pstate.myAC > 0 || pstate.myCLP > 0) &&
               <div style={{
                 marginTop: 10, display: 'inline-flex', alignItems: 'center', gap: 6,
                 background: COLORS.goodSoft, color: COLORS.good,
                 padding: '5px 11px', borderRadius: 999, fontSize: 11.5, fontWeight: 700
               }}>
-                ♥ Tu aporte: {state.myAC > 0 ? `${fmtCL(state.myAC)} AC` : ''}{state.myAC > 0 && state.myCLP > 0 ? ' · ' : ''}{state.myCLP > 0 ? `$${fmtCL(state.myCLP)}` : ''}
+                ♥ Tu aporte: {pstate.myAC > 0 ? `${fmtCL(pstate.myAC)} AC` : ''}{pstate.myAC > 0 && pstate.myCLP > 0 ? ' · ' : ''}{pstate.myCLP > 0 ? `$${fmtCL(pstate.myCLP)}` : ''}
               </div>
               }
             </div>
@@ -999,7 +1042,7 @@ function ScreenComunidad({ state, dispatch, showToast, active }) {
 
               <button
               disabled={donMode === 'ac' && !canDonateAC}
-              onClick={() => setConfirming(true)}
+              onClick={() => onConfirm(donMode, donMode === 'ac' ? donAC : donM3)}
               style={{
                 width: '100%', marginTop: 10,
                 background: donMode === 'ac' && !canDonateAC ? COLORS.divider : COLORS.ink,
@@ -1028,12 +1071,70 @@ function ScreenComunidad({ state, dispatch, showToast, active }) {
             }}>
               <div style={{ fontSize: 14, fontWeight: 700, color: COLORS.good }}>🎉 ¡Meta alcanzada!</div>
               <div style={{ fontSize: 12, color: COLORS.inkSoft, marginTop: 4 }}>
-                Gracias a {fmtCL(state.donors)} donantes, el proyecto está 100% financiado.
+                Gracias a {fmtCL(pstate.donors)} donantes, el proyecto está 100% financiado.
               </div>
             </div>
             }
           </div>
-        </Card>
+        </Card>);
+}
+
+function ScreenComunidad({ state, dispatch, showToast, active }) {
+  const [pending, setPending] = React.useState(null); // { proj, mode, amount }
+  const [page, setPage] = React.useState(0);
+  const clp = (n) => n.toLocaleString('es-CL');
+  const canConfirm = !pending || pending.mode !== 'ac' || state.balance >= pending.amount;
+
+  const confirmDonation = () => {
+    if (!pending) return;
+    haptic();
+    if (pending.mode === 'ac') {
+      if (state.balance < pending.amount) return;
+      dispatch({ type: 'donateAC', pid: pending.proj.id, amount: pending.amount });
+      showToast(`¡Gracias! Aportaste ${pending.amount} AC a ${pending.proj.loc}`);
+    } else {
+      dispatch({ type: 'donateM3', pid: pending.proj.id, m3: pending.amount });
+      showToast(`¡Gracias! Aportaste $${clp(pending.amount * CLP_PER_M3)} a ${pending.proj.loc}`);
+    }
+    setPending(null);
+  };
+
+  return (
+    <div style={{ paddingBottom: 24 }}>
+      <AppHeader subtitle="Tu impacto en la región" title="Comunidad" />
+
+      {/* Carrusel de proyectos comunitarios */}
+      <div className="ar-carousel"
+      onScroll={(e) => {
+        const el = e.currentTarget;
+        setPage(Math.round(el.scrollLeft / el.clientWidth));
+      }}
+      style={{
+        display: 'flex', overflowX: 'auto', scrollSnapType: 'x mandatory',
+        scrollbarWidth: 'none', gap: 12, padding: '0 16px'
+      }}>
+        {PROJECTS.map((p) =>
+        <div key={p.id} style={{ flex: '0 0 100%', scrollSnapAlign: 'center', minWidth: 0 }}>
+            <ProjectCard
+          proj={p}
+          pstate={state.projects[p.id]}
+          balance={state.balance}
+          onConfirm={(mode, amount) => setPending({ proj: p, mode, amount })} />
+          </div>
+        )}
+      </div>
+      {/* indicador de páginas */}
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 6, padding: '12px 0 14px' }}>
+        {PROJECTS.map((p, i) =>
+        <span key={p.id} style={{
+          width: page === i ? 20 : 7, height: 7, borderRadius: 999,
+          background: page === i ? COLORS.primary : COLORS.divider,
+          transition: 'all .3s'
+        }} />
+        )}
+        <span style={{ fontSize: 10.5, color: COLORS.inkMuted, fontWeight: 600, marginLeft: 8 }}>
+          Desliza para ver más proyectos
+        </span>
       </div>
 
       {/* Impacto personal */}
@@ -1107,31 +1208,35 @@ function ScreenComunidad({ state, dispatch, showToast, active }) {
       </div>
 
       {/* Hoja de confirmación de donación */}
-      <BottomSheet open={confirming} onClose={() => setConfirming(false)}>
-        <div style={{ fontSize: 17, fontWeight: 700, color: COLORS.ink, letterSpacing: -0.2, marginBottom: 4 }}>
-          Confirmar donación
-        </div>
-        <div style={{ fontSize: 12.5, color: COLORS.inkMuted, marginBottom: 12 }}>
-          Red agua potable rural · Santa Bárbara
-        </div>
-        {donMode === 'ac' ?
+      <BottomSheet open={!!pending} onClose={() => setPending(null)}>
+        {pending &&
         <>
-          <SheetRow label="Aporte" value={`${donAC} AC`} />
-          <SheetRow label="Saldo actual" value={`${fmtCL(state.balance)} AC`} />
-          <SheetRow label="Saldo después" value={`${fmtCL(state.balance - donAC)} AC`} strong />
-        </> :
-        <>
-          <SheetRow label="Aporte" value={`${donM3} m³ de agua`} />
-          <SheetRow label="Equivalente en dinero" value={`$${fmtCL(donM3 * CLP_PER_M3)}`} strong />
-          <div style={{ fontSize: 11, color: COLORS.inkMuted, padding: '10px 0 0', lineHeight: 1.4 }}>
-            Demo: pago simulado · tarifa referencial Essbio $1.180/m³
+          <div style={{ fontSize: 17, fontWeight: 700, color: COLORS.ink, letterSpacing: -0.2, marginBottom: 4 }}>
+            Confirmar donación
           </div>
+          <div style={{ fontSize: 12.5, color: COLORS.inkMuted, marginBottom: 12 }}>
+            {pending.proj.title} · {pending.proj.loc}
+          </div>
+          {pending.mode === 'ac' ?
+          <>
+            <SheetRow label="Aporte" value={`${pending.amount} AC`} />
+            <SheetRow label="Saldo actual" value={`${fmtCL(state.balance)} AC`} />
+            <SheetRow label="Saldo después" value={`${fmtCL(state.balance - pending.amount)} AC`} strong />
+          </> :
+          <>
+            <SheetRow label="Aporte" value={`${pending.amount} m³ de agua`} />
+            <SheetRow label="Equivalente en dinero" value={`$${fmtCL(pending.amount * CLP_PER_M3)}`} strong />
+            <div style={{ fontSize: 11, color: COLORS.inkMuted, padding: '10px 0 0', lineHeight: 1.4 }}>
+              Demo: pago simulado · tarifa referencial Essbio $1.180/m³
+            </div>
+          </>
+          }
+          <SheetButton onClick={confirmDonation} disabled={!canConfirm}>
+            {pending.mode === 'ac' ? `Donar ${pending.amount} AC` : `Donar $${fmtCL(pending.amount * CLP_PER_M3)}`}
+          </SheetButton>
+          <SheetButton ghost onClick={() => setPending(null)}>Cancelar</SheetButton>
         </>
         }
-        <SheetButton onClick={confirmDonation} disabled={donMode === 'ac' && !canDonateAC}>
-          {donMode === 'ac' ? `Donar ${donAC} AC` : `Donar $${fmtCL(donM3 * CLP_PER_M3)}`}
-        </SheetButton>
-        <SheetButton ghost onClick={() => setConfirming(false)}>Cancelar</SheetButton>
       </BottomSheet>
     </div>);
 }
@@ -1165,6 +1270,625 @@ function ScreenReportes({ dark }) {
       src={`reportes.html?theme=${mode}`}
       title="Reportes comunitarios"
       style={{ display: 'block', width: '100%', height: '100%', border: 'none', background: COLORS.bg }} />);
+}
+
+// ─────────────────────────────────────────────────────────
+// BIENVENIDA — registro de nombre al primer uso
+// ─────────────────────────────────────────────────────────
+function Welcome({ dark, onDone }) {
+  const [name, setName] = React.useState('');
+  const valid = name.trim().length >= 2;
+  const go = () => { if (valid) { haptic(); onDone(name.trim()); } };
+  return (
+    <div style={{
+      position: 'absolute', inset: 0, zIndex: 100, display: 'flex', flexDirection: 'column',
+      padding: 'calc(env(safe-area-inset-top, 0px) + 30px) 26px calc(env(safe-area-inset-bottom, 0px) + 26px)'
+    }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', textAlign: 'center' }}>
+        <div className="ar-fade">
+          <img src={logoSrc(dark)} alt="AquaReward" style={{ width: 250, maxWidth: '78vw', display: 'block', margin: '0 auto' }} />
+          <div style={{ marginTop: 22, fontSize: 15.5, color: COLORS.inkSoft, lineHeight: 1.55, maxWidth: 300, marginLeft: 'auto', marginRight: 'auto' }}>
+            Gana <b style={{ color: COLORS.ink }}>AquaCoins</b> por ahorrar agua, canjea premios reales y apoya proyectos de agua rural en el Biobío.
+          </div>
+          <div style={{ marginTop: 16 }}>
+            <Pill>Región del Biobío · con datos de Essbio</Pill>
+          </div>
+        </div>
+      </div>
+      <div>
+        <label style={{ display: 'block', fontSize: 13.5, fontWeight: 700, color: COLORS.ink, marginBottom: 8 }}>
+          Para empezar, ¿cómo te llamas?
+        </label>
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') go(); }}
+          placeholder="Escribe tu nombre"
+          maxLength={24}
+          autoComplete="name"
+          style={{
+            width: '100%', padding: '15px 16px', borderRadius: 15,
+            border: `1.5px solid ${COLORS.divider}`, background: COLORS.card,
+            color: COLORS.ink, fontSize: 16, fontWeight: 600, fontFamily: 'inherit', outline: 'none'
+          }} />
+        <button disabled={!valid} onClick={go} style={{
+          width: '100%', marginTop: 12, padding: 16, borderRadius: 15, border: 'none',
+          background: valid ? COLORS.primary : COLORS.divider,
+          color: valid ? '#fff' : COLORS.inkMuted,
+          fontSize: 16, fontWeight: 800, cursor: valid ? 'pointer' : 'not-allowed',
+          fontFamily: 'inherit', transition: 'background .25s'
+        }}>Comenzar →</button>
+        <div style={{ fontSize: 11.5, color: COLORS.inkMuted, textAlign: 'center', marginTop: 12, lineHeight: 1.4 }}>
+          Tu nombre se guarda solo en este teléfono. Sin correos, sin contraseñas.
+        </div>
+      </div>
+    </div>);
+}
+
+// ─────────────────────────────────────────────────────────
+// MINI TUTORIALES — se muestran la primera vez que se visita cada pantalla
+// ─────────────────────────────────────────────────────────
+const TUTORIALS = {
+  inicio: [
+  { icon: '💰', t: 'Tu saldo de AquaCoins', d: 'Ganas AquaCoins (AC) automáticamente por ahorrar agua cada mes. El botón "Canjear" te lleva directo a los premios.' },
+  { icon: '💧', t: 'Tu consumo del mes', d: 'El anillo muestra los m³ que llevas y cuánto falta para tu meta. Si cumples la meta, recibes un bonus de AquaCoins.' },
+  { icon: '💡', t: 'Tip de hoy', d: 'Cada día un consejo para ahorrar agua en tu casa. Cuando lo hayas leído, tócalo y aparecerá otro.' }],
+
+  premios: [
+  { icon: '🎁', t: 'Canjea premios reales', d: 'Usa tus AquaCoins en descuentos, kits de ahorro y más. Toca "Canjear" y confirma: el costo se descuenta de tu saldo.' },
+  { icon: '🔎', t: 'Filtra por categoría', d: 'Los botones de arriba filtran el catálogo: Servicios, Eco o Insignias.' },
+  { icon: '🧾', t: 'Mis canjes', d: 'Todo lo que canjeas queda registrado al final de esta pantalla, con fecha y costo.' }],
+
+  comunidad: [
+  { icon: '🤝', t: 'Apoya proyectos reales', d: 'Dona AquaCoins o m³ de agua a proyectos de agua rural del Biobío. Tu aporte avanza la barra de financiamiento.' },
+  { icon: '👉', t: 'Desliza entre proyectos', d: 'Hay más de un proyecto activo: desliza la tarjeta hacia el lado para conocer el proyecto de Cabrero.' }],
+
+  reportes: [
+  { icon: '📍', t: 'Mapa comunitario', d: 'Cada pin es un reporte de fuga hecho por vecinos. Tócalo para ver en qué estado está.' },
+  { icon: '➕', t: 'Reporta una fuga', d: 'Toca "Reportar", elige el tipo de problema y luego toca el punto exacto del mapa donde está la fuga.' },
+  { icon: '✅', t: 'La comunidad confirma', d: 'Con 3 confirmaciones de vecinos, el reporte se escala automáticamente a Essbio.' }]
+};
+
+function Tutorial({ screen, dark, onDone }) {
+  const steps = TUTORIALS[screen];
+  const [i, setI] = React.useState(0);
+  if (!steps || !steps.length) return null;
+  const st = steps[i];
+  const last = i === steps.length - 1;
+  return (
+    <div style={{ position: 'absolute', inset: 0, zIndex: 95, background: 'rgba(8,16,28,0.62)', display: 'flex', alignItems: 'flex-end' }}>
+      <div style={{
+        width: '100%', background: COLORS.card, borderRadius: '26px 26px 0 0',
+        padding: '20px 24px calc(env(safe-area-inset-bottom, 0px) + 20px)',
+        boxShadow: '0 -12px 40px rgba(2,28,138,0.3)'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+          <img src={logoSrc(dark)} alt="AquaReward" style={{ height: 20 }} />
+          <span style={{ fontSize: 11, fontWeight: 700, color: COLORS.inkMuted, letterSpacing: 0.5, textTransform: 'uppercase' }}>
+            Tutorial · {i + 1} de {steps.length}
+          </span>
+        </div>
+        <div key={i} className="ar-fade">
+          <div style={{ fontSize: 38, lineHeight: 1 }}>{st.icon}</div>
+          <div style={{ fontSize: 19, fontWeight: 800, color: COLORS.ink, marginTop: 10, letterSpacing: -0.3 }}>{st.t}</div>
+          <div style={{ fontSize: 14, color: COLORS.inkSoft, marginTop: 6, lineHeight: 1.5, minHeight: 63 }}>{st.d}</div>
+        </div>
+        <div style={{ display: 'flex', gap: 5, margin: '16px 0 14px' }}>
+          {steps.map((_, k) =>
+          <span key={k} style={{
+            height: 6, borderRadius: 999, flex: k === i ? 2.2 : 1,
+            background: k <= i ? COLORS.primary : COLORS.divider, transition: 'all .3s'
+          }} />
+          )}
+        </div>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button onClick={onDone} style={{
+            flex: 1, background: 'transparent', color: COLORS.inkSoft,
+            border: `1px solid ${COLORS.divider}`, padding: 13, borderRadius: 13,
+            fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit'
+          }}>Saltar</button>
+          <button onClick={() => { haptic(); if (last) onDone();else setI(i + 1); }} style={{
+            flex: 2, background: COLORS.primary, color: '#fff', border: 'none',
+            padding: 13, borderRadius: 13, fontSize: 14, fontWeight: 700,
+            cursor: 'pointer', fontFamily: 'inherit'
+          }}>{last ? '¡Entendido!' : 'Siguiente →'}</button>
+        </div>
+      </div>
+    </div>);
+}
+
+// ─────────────────────────────────────────────────────────
+// PERFIL — avatar (arriba a la derecha en Inicio): nombre y modo fácil
+// ─────────────────────────────────────────────────────────
+function Switch({ on, onChange }) {
+  return (
+    <button onClick={() => onChange(!on)} aria-pressed={on} aria-label="Activar" style={{
+      width: 52, height: 32, borderRadius: 999, border: 'none', cursor: 'pointer',
+      background: on ? COLORS.good : COLORS.divider, position: 'relative',
+      transition: 'background .25s', flexShrink: 0, padding: 0
+    }}>
+      <span style={{
+        position: 'absolute', top: 3, left: on ? 23 : 3, width: 26, height: 26,
+        borderRadius: 999, background: '#fff', transition: 'left .25s',
+        boxShadow: '0 1px 4px rgba(0,0,0,0.25)'
+      }} />
+    </button>);
+}
+
+function ProfileSheet({ open, onClose, state, dispatch, showToast }) {
+  const [name, setName] = React.useState(state.userName);
+  React.useEffect(() => { if (open) setName(state.userName); }, [open, state.userName]);
+  const canSave = name.trim().length >= 2 && name.trim() !== state.userName;
+  const save = () => {
+    if (!canSave) return;
+    dispatch({ type: 'setName', name });
+    showToast('Nombre actualizado');
+  };
+  return (
+    <BottomSheet open={open} onClose={onClose}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 10 }}>
+        <div style={{
+          width: 52, height: 52, borderRadius: 999,
+          background: `linear-gradient(135deg, ${COLORS.aqua}, ${COLORS.primary})`,
+          color: '#fff', fontWeight: 700, fontSize: 18,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0
+        }}>{initials(state.userName)}</div>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 18, fontWeight: 800, color: COLORS.ink, letterSpacing: -0.2 }}>{state.userName}</div>
+          <div style={{ fontSize: 11.5, color: COLORS.inkMuted, marginTop: 1 }}>Tus datos viven solo en este teléfono</div>
+        </div>
+      </div>
+
+      {/* Modo fácil (adultos mayores) */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 12, padding: '14px 0',
+        borderTop: `1px solid ${COLORS.divider}`, borderBottom: `1px solid ${COLORS.divider}`
+      }}>
+        <span style={{ fontSize: 26 }}>🤍</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 14.5, fontWeight: 700, color: COLORS.ink }}>Modo fácil</div>
+          <div style={{ fontSize: 12, color: COLORS.inkSoft, lineHeight: 1.4, marginTop: 1 }}>
+            Pantallas simples, letra grande y botones de ayuda. Pensado para adultos mayores.
+          </div>
+        </div>
+        <Switch on={state.seniorMode} onChange={(on) => {
+          haptic();
+          dispatch({ type: 'setSenior', on });
+          onClose();
+        }} />
+      </div>
+
+      {/* Repetir tutoriales */}
+      <button onClick={() => {
+        dispatch({ type: 'resetTutorials' });
+        showToast('Verás los tutoriales de nuevo');
+        onClose();
+      }} style={{
+        width: '100%', display: 'flex', alignItems: 'center', gap: 12,
+        background: 'transparent', border: 'none', borderBottom: `1px solid ${COLORS.divider}`,
+        padding: '14px 0', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left'
+      }}>
+        <span style={{ fontSize: 24 }}>🎓</span>
+        <span style={{ flex: 1, fontSize: 14.5, fontWeight: 700, color: COLORS.ink }}>Ver los tutoriales otra vez</span>
+        <span style={{ color: COLORS.inkMuted, fontSize: 18 }}>›</span>
+      </button>
+
+      {/* Cambiar nombre */}
+      <div style={{ paddingTop: 14 }}>
+        <div style={{ fontSize: 11, color: COLORS.inkMuted, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 8 }}>Tu nombre</div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') save(); }}
+            maxLength={24}
+            style={{
+              flex: 1, minWidth: 0, padding: '12px 14px', borderRadius: 12,
+              border: `1.5px solid ${COLORS.divider}`, background: COLORS.bg,
+              color: COLORS.ink, fontSize: 16, fontWeight: 600, fontFamily: 'inherit', outline: 'none'
+            }} />
+          <button disabled={!canSave} onClick={save} style={{
+            padding: '0 18px', borderRadius: 12, border: 'none',
+            background: canSave ? COLORS.primary : COLORS.divider,
+            color: canSave ? '#fff' : COLORS.inkMuted,
+            fontSize: 13.5, fontWeight: 700, cursor: canSave ? 'pointer' : 'not-allowed', fontFamily: 'inherit'
+          }}>Guardar</button>
+        </div>
+      </div>
+      <SheetButton ghost onClick={onClose}>Cerrar</SheetButton>
+    </BottomSheet>);
+}
+
+// ─────────────────────────────────────────────────────────
+// MODO FÁCIL — interfaz simplificada para adultos mayores
+// ─────────────────────────────────────────────────────────
+const SENIOR_HELP = {
+  home: { title: '¿Cómo funciona esta pantalla?', lines: [
+    'Arriba están tus AquaCoins: puntos que ganas por ahorrar agua en tu casa.',
+    'Más abajo ves cuánta agua has usado este mes.',
+    'Los botones grandes te llevan a cada sección: premios, donaciones, reportes y consejos.',
+    'Si te pierdes, toca el círculo con el signo "?" — siempre explica la pantalla donde estás.'] },
+  premios: { title: '¿Cómo canjeo un premio?', lines: [
+    'Cada tarjeta es un premio. El número junto a la moneda dice cuántos AquaCoins cuesta.',
+    'Si el botón está azul, te alcanza. Tócalo y confirma: es un solo paso.',
+    'Tus AquaCoins se descuentan al confirmar. Nunca se cobra dinero.'] },
+  donar: { title: '¿Cómo dono?', lines: [
+    'Primero elige a qué proyecto quieres ayudar tocando su tarjeta.',
+    'Después elige cuántos AquaCoins quieres dar.',
+    'Al final confirma. Tu aporte ayuda a llevar agua potable a familias del campo.'] },
+  reportes: { title: '¿Cómo reporto una fuga?', lines: [
+    'El mapa muestra fugas de agua reportadas por los vecinos.',
+    'Toca el botón azul "Reportar", elige qué problema ves, y después toca el lugar del mapa donde está.',
+    'Cuando 3 vecinos confirman una fuga, Essbio la repara.'] },
+  consejos: { title: '¿Qué son los consejos?', lines: [
+    'Son ideas simples para gastar menos agua en la casa.',
+    'Cada consejo explica cuánta agua ahorra.',
+    'Ahorrar agua te da AquaCoins todos los meses.'] }
+};
+
+function HelpSheet({ open, onClose, help }) {
+  return (
+    <BottomSheet open={open} onClose={onClose}>
+      {help &&
+      <>
+        <div style={{ fontSize: 22, fontWeight: 800, color: COLORS.ink, marginBottom: 12, lineHeight: 1.25, letterSpacing: -0.3 }}>
+          {help.title}
+        </div>
+        {help.lines.map((l, i) =>
+        <div key={i} style={{
+          display: 'flex', gap: 12, padding: '11px 0', alignItems: 'flex-start',
+          borderBottom: i < help.lines.length - 1 ? `1px solid ${COLORS.divider}` : 'none'
+        }}>
+            <span style={{
+            width: 28, height: 28, borderRadius: 999, background: COLORS.aquaSoft,
+            color: COLORS.primary, fontSize: 15, fontWeight: 800, flexShrink: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'center'
+          }}>{i + 1}</span>
+            <span style={{ fontSize: 17, lineHeight: 1.5, color: COLORS.ink }}>{l}</span>
+          </div>
+        )}
+        <button onClick={onClose} style={{
+          width: '100%', marginTop: 16, padding: 17, borderRadius: 15, border: 'none',
+          background: COLORS.primary, color: '#fff', fontSize: 18, fontWeight: 800,
+          cursor: 'pointer', fontFamily: 'inherit'
+        }}>Entendido</button>
+      </>
+      }
+    </BottomSheet>);
+}
+
+function SeniorHeader({ title, onBack, onHelp }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 10,
+      padding: 'calc(env(safe-area-inset-top, 0px) + 14px) 16px 12px'
+    }}>
+      {onBack &&
+      <button onClick={onBack} style={{
+        display: 'flex', alignItems: 'center', gap: 6, background: COLORS.card,
+        border: `2px solid ${COLORS.divider}`, borderRadius: 14, padding: '12px 16px',
+        fontSize: 17, fontWeight: 800, color: COLORS.ink, cursor: 'pointer',
+        fontFamily: 'inherit', flexShrink: 0
+      }}>← Volver</button>
+      }
+      <div style={{ flex: 1, fontSize: 22, fontWeight: 800, color: COLORS.ink, letterSpacing: -0.3, minWidth: 0 }}>{title}</div>
+      <button onClick={onHelp} aria-label="Ayuda" style={{
+        width: 50, height: 50, borderRadius: 999, background: COLORS.primary,
+        color: '#fff', fontSize: 24, fontWeight: 800, border: 'none',
+        cursor: 'pointer', flexShrink: 0, fontFamily: 'inherit'
+      }}>?</button>
+    </div>);
+}
+
+function SeniorBigButton({ emoji, label, sub, onClick }) {
+  return (
+    <button onClick={() => { haptic(); onClick(); }} style={{
+      width: '100%', display: 'flex', alignItems: 'center', gap: 15,
+      background: COLORS.card, border: `2px solid ${COLORS.divider}`, borderRadius: 20,
+      padding: '17px 16px', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
+      boxShadow: COLORS.shadow
+    }}>
+      <span style={{ fontSize: 31, width: 44, textAlign: 'center', flexShrink: 0 }}>{emoji}</span>
+      <span style={{ flex: 1, minWidth: 0 }}>
+        <span style={{ display: 'block', fontSize: 19, fontWeight: 800, color: COLORS.ink, letterSpacing: -0.2 }}>{label}</span>
+        {sub && <span style={{ display: 'block', fontSize: 14.5, color: COLORS.inkSoft, marginTop: 2, lineHeight: 1.35 }}>{sub}</span>}
+      </span>
+      <span style={{ fontSize: 26, color: COLORS.inkMuted, flexShrink: 0 }}>›</span>
+    </button>);
+}
+
+function SeniorApp({ state, dispatch, dark, showToast }) {
+  const [page, setPage] = React.useState('home');
+  const [help, setHelp] = React.useState(false);
+  const [pendingReward, setPendingReward] = React.useState(null);
+  const [donProj, setDonProj] = React.useState(null);
+  const [donAmount, setDonAmount] = React.useState(null);
+  const first = firstName(state.userName);
+  const multiActive = state.multiplierUntil > Date.now();
+  const now = new Date();
+  const month = now.toLocaleDateString('es-CL', { month: 'long' });
+
+  const goHome = () => { haptic(); setPage('home'); setHelp(false); setDonProj(null); setDonAmount(null); };
+
+  const confirmReward = () => {
+    if (!pendingReward || state.balance < pendingReward.cost) return;
+    haptic();
+    dispatch({ type: 'redeem', reward: pendingReward });
+    showToast(`Listo: canjeaste ${pendingReward.title}`);
+    setPendingReward(null);
+  };
+
+  const confirmDon = () => {
+    if (!donProj || !donAmount || state.balance < donAmount) return;
+    haptic();
+    dispatch({ type: 'donateAC', pid: donProj.id, amount: donAmount });
+    showToast('¡Muchas gracias por tu aporte!');
+    setDonProj(null);
+    setDonAmount(null);
+  };
+
+  const scroller = (children) =>
+  <div className="ar-screen" style={{
+    flex: 1, overflowY: 'auto', WebkitOverflowScrolling: 'touch',
+    padding: '2px 16px calc(env(safe-area-inset-bottom, 0px) + 28px)'
+  }}>{children}</div>;
+
+  const bigBtn = (label, opts = {}) => ({
+    width: '100%', padding: 17, borderRadius: 15, border: 'none',
+    background: opts.disabled ? COLORS.divider : opts.ghost ? 'transparent' : opts.color || COLORS.primary,
+    color: opts.disabled ? COLORS.inkMuted : opts.ghost ? COLORS.inkSoft : '#fff',
+    ...(opts.ghost ? { border: `2px solid ${COLORS.divider}` } : {}),
+    fontSize: 18, fontWeight: 800, cursor: opts.disabled ? 'not-allowed' : 'pointer',
+    fontFamily: 'inherit', marginTop: opts.mt ?? 0
+  });
+
+  // ── PANTALLA PRINCIPAL ──
+  if (page === 'home') {
+    return (
+      <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: 'calc(env(safe-area-inset-top, 0px) + 16px) 18px 8px'
+        }}>
+          <img src={logoSrc(dark)} alt="AquaReward" style={{ height: 30 }} />
+          <button onClick={() => setHelp(true)} aria-label="Ayuda" style={{
+            width: 50, height: 50, borderRadius: 999, background: COLORS.primary,
+            color: '#fff', fontSize: 24, fontWeight: 800, border: 'none',
+            cursor: 'pointer', fontFamily: 'inherit'
+          }}>?</button>
+        </div>
+        {scroller(
+          <>
+            <div style={{ fontSize: 27, fontWeight: 800, color: COLORS.ink, letterSpacing: -0.4, padding: '8px 2px 14px' }}>
+              Hola, {first} 👋
+            </div>
+
+            {/* saldo grande */}
+            <div style={{
+              background: `linear-gradient(135deg, ${COLORS.primary}, ${COLORS.primaryDk})`,
+              borderRadius: 22, padding: '20px 22px', color: '#fff',
+              boxShadow: '0 8px 24px rgba(14,110,126,0.28)'
+            }}>
+              <div style={{ fontSize: 14, opacity: 0.85, fontWeight: 700, letterSpacing: 0.3 }}>TUS AQUACOINS</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
+                {Icon.coin(34)}
+                <span style={{ fontFamily: NUMFONT, fontSize: 52, fontWeight: 600, letterSpacing: -1, lineHeight: 1 }}>{fmtCL(state.balance)}</span>
+              </div>
+              <div style={{ fontSize: 15, opacity: 0.9, marginTop: 10, lineHeight: 1.4 }}>
+                Los ganas ahorrando agua en tu casa.{multiActive ? ' Tienes el bonus ×2 activo.' : ''}
+              </div>
+            </div>
+
+            {/* consumo simple */}
+            <Card style={{ marginTop: 14, padding: '18px 20px' }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: COLORS.inkSoft }}>Tu consumo de {month}</div>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 6 }}>
+                <span style={{ fontFamily: NUMFONT, fontSize: 44, fontWeight: 600, color: COLORS.ink, letterSpacing: -1, lineHeight: 1 }}>8,7</span>
+                <span style={{ fontSize: 18, fontWeight: 700, color: COLORS.inkSoft }}>m³</span>
+              </div>
+              <div style={{
+                marginTop: 10, fontSize: 16.5, fontWeight: 700, color: COLORS.good,
+                background: COLORS.goodSoft, borderRadius: 12, padding: '10px 14px', lineHeight: 1.4
+              }}>
+                👍 Vas muy bien: 12% menos que el mes pasado.
+              </div>
+            </Card>
+
+            {/* accesos grandes */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 16 }}>
+              <SeniorBigButton emoji="🎁" label="Mis premios" sub="Canjea tus AquaCoins" onClick={() => setPage('premios')} />
+              <SeniorBigButton emoji="💧" label="Donar agua" sub="Ayuda a familias del campo" onClick={() => setPage('donar')} />
+              <SeniorBigButton emoji="📍" label="Reportar una fuga" sub="Avisa si ves agua perdiéndose en la calle" onClick={() => setPage('reportes')} />
+              <SeniorBigButton emoji="💡" label="Consejos de ahorro" sub="Ideas para gastar menos agua" onClick={() => setPage('consejos')} />
+            </div>
+
+            <button onClick={() => setHelp(true)} style={{
+              ...bigBtn('', { ghost: true, mt: 18 }), color: COLORS.primary, borderColor: COLORS.primary
+            }}>❓ ¿Necesitas ayuda?</button>
+            <button onClick={() => { haptic(); dispatch({ type: 'setSenior', on: false }); }} style={bigBtn('', { ghost: true, mt: 10 })}>
+              Usar modo normal
+            </button>
+          </>
+        )}
+        <HelpSheet open={help} onClose={() => setHelp(false)} help={SENIOR_HELP.home} />
+      </div>);
+  }
+
+  // ── MIS PREMIOS ──
+  if (page === 'premios') {
+    return (
+      <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+        <SeniorHeader title="Mis premios" onBack={goHome} onHelp={() => setHelp(true)} />
+        {scroller(
+          <>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8, background: COLORS.coinSoft,
+              borderRadius: 14, padding: '13px 16px', marginBottom: 14
+            }}>
+              {Icon.coin(22)}
+              <span style={{ fontSize: 17, fontWeight: 800, color: COLORS.ink }}>Tienes {fmtCL(state.balance)} AquaCoins</span>
+            </div>
+            {REWARDS.map((r) => {
+              const isActiveMulti = r.id === 'badge' && multiActive;
+              const can = state.balance >= r.cost && !isActiveMulti;
+              return (
+                <Card key={r.id} style={{ padding: 18, marginBottom: 12 }}>
+                  <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
+                    <div style={{
+                      width: 56, height: 56, borderRadius: 15, background: r.tint(), flexShrink: 0,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center'
+                    }}>{r.icon(30)}</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 18, fontWeight: 800, color: COLORS.ink, letterSpacing: -0.2, lineHeight: 1.25 }}>{r.title}</div>
+                      <div style={{ fontSize: 14.5, color: COLORS.inkSoft, marginTop: 3, lineHeight: 1.35 }}>{r.sub}</div>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 13 }}>
+                    {Icon.coin(19)}
+                    <span style={{ fontSize: 16.5, fontWeight: 800, color: COLORS.ink }}>Cuesta {fmtCL(r.cost)} AquaCoins</span>
+                  </div>
+                  <button
+                  disabled={!can}
+                  onClick={() => can && setPendingReward(r)}
+                  style={bigBtn('', { disabled: !can, mt: 12 })}>
+                    {isActiveMulti ? 'Ya está activo ✓' : can ? 'Canjear este premio' : `Te faltan ${fmtCL(r.cost - state.balance)} AquaCoins`}
+                  </button>
+                </Card>);
+            })}
+          </>
+        )}
+        <BottomSheet open={!!pendingReward} onClose={() => setPendingReward(null)}>
+          {pendingReward &&
+          <>
+            <div style={{ fontSize: 22, fontWeight: 800, color: COLORS.ink, letterSpacing: -0.3 }}>¿Canjear este premio?</div>
+            <div style={{ fontSize: 17, color: COLORS.inkSoft, margin: '8px 0 6px', lineHeight: 1.4 }}>{pendingReward.title}</div>
+            <div style={{ fontSize: 17, color: COLORS.ink, padding: '10px 0', borderTop: `1px solid ${COLORS.divider}`, lineHeight: 1.6 }}>
+              Te costará <b>{fmtCL(pendingReward.cost)} AquaCoins</b>.<br />
+              Te quedarán <b>{fmtCL(state.balance - pendingReward.cost)} AquaCoins</b>.
+            </div>
+            <button onClick={confirmReward} style={bigBtn('', { color: COLORS.good, mt: 8 })}>Sí, canjear</button>
+            <button onClick={() => setPendingReward(null)} style={bigBtn('', { ghost: true, mt: 10 })}>No, volver atrás</button>
+          </>
+          }
+        </BottomSheet>
+        <HelpSheet open={help} onClose={() => setHelp(false)} help={SENIOR_HELP.premios} />
+      </div>);
+  }
+
+  // ── DONAR ──
+  if (page === 'donar') {
+    return (
+      <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+        <SeniorHeader title="Donar agua" onBack={donProj ? () => { setDonProj(null); setDonAmount(null); } : goHome} onHelp={() => setHelp(true)} />
+        {scroller(
+          !donProj ?
+          <>
+            <div style={{ fontSize: 17.5, fontWeight: 700, color: COLORS.ink, lineHeight: 1.45, padding: '4px 2px 14px' }}>
+              Elige el proyecto que quieres apoyar:
+            </div>
+            {PROJECTS.map((p) => {
+              const ps = state.projects[p.id];
+              const pct = Math.round(Math.min(ps.funded / p.goal, 1) * 100);
+              return (
+                <Card key={p.id} onClick={() => { haptic(); setDonProj(p); }} style={{ padding: 0, overflow: 'hidden', marginBottom: 14, cursor: 'pointer' }}>
+                  <div style={{ height: 120, backgroundImage: `url("${p.img}")`, backgroundSize: 'cover', backgroundPosition: 'center 40%' }} />
+                  <div style={{ padding: 18 }}>
+                    <div style={{ fontSize: 19, fontWeight: 800, color: COLORS.ink, letterSpacing: -0.2 }}>{p.title}</div>
+                    <div style={{ fontSize: 15, color: COLORS.inkSoft, marginTop: 3 }}>{p.loc} · {p.fam}</div>
+                    <div style={{ height: 12, borderRadius: 999, background: COLORS.divider, overflow: 'hidden', marginTop: 12 }}>
+                      <div style={{ width: `${pct}%`, height: '100%', background: `linear-gradient(90deg, ${COLORS.aqua}, ${COLORS.primary})`, borderRadius: 999 }} />
+                    </div>
+                    <div style={{ fontSize: 15.5, fontWeight: 700, color: COLORS.ink, marginTop: 8 }}>{pct}% completado</div>
+                    <button style={bigBtn('', { mt: 12 })}>Elegir este proyecto</button>
+                  </div>
+                </Card>);
+            })}
+          </> :
+
+          <>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 10, background: COLORS.aquaSoft,
+              borderRadius: 14, padding: '13px 16px', marginBottom: 16
+            }}>
+              <span style={{ fontSize: 22 }}>💧</span>
+              <span style={{ fontSize: 15.5, fontWeight: 700, color: COLORS.ink, lineHeight: 1.35 }}>
+                Proyecto: {donProj.title} ({donProj.loc})
+              </span>
+            </div>
+            <div style={{ fontSize: 17.5, fontWeight: 700, color: COLORS.ink, lineHeight: 1.45, paddingBottom: 14 }}>
+              ¿Cuántos AquaCoins quieres donar?
+            </div>
+            {[25, 50, 100, 200].map((v) => {
+              const can = state.balance >= v;
+              return (
+                <button key={v} disabled={!can} onClick={() => { haptic(); setDonAmount(v); }} style={{
+                  width: '100%', display: 'flex', alignItems: 'center', gap: 12,
+                  background: COLORS.card, border: `2px solid ${COLORS.divider}`, borderRadius: 16,
+                  padding: '17px 18px', cursor: can ? 'pointer' : 'not-allowed', fontFamily: 'inherit',
+                  marginBottom: 11, opacity: can ? 1 : 0.5, boxShadow: COLORS.shadow
+                }}>
+                  {Icon.coin(24)}
+                  <span style={{ flex: 1, textAlign: 'left', fontSize: 19, fontWeight: 800, color: COLORS.ink }}>{v} AquaCoins</span>
+                  <span style={{ fontSize: 24, color: COLORS.inkMuted }}>›</span>
+                </button>);
+            })}
+            <div style={{ fontSize: 14.5, color: COLORS.inkMuted, textAlign: 'center', marginTop: 6 }}>
+              Tienes {fmtCL(state.balance)} AquaCoins
+            </div>
+          </>
+        )}
+        <BottomSheet open={!!(donProj && donAmount)} onClose={() => setDonAmount(null)}>
+          {donProj && donAmount &&
+          <>
+            <div style={{ fontSize: 22, fontWeight: 800, color: COLORS.ink, letterSpacing: -0.3 }}>¿Confirmas tu donación?</div>
+            <div style={{ fontSize: 17, color: COLORS.ink, padding: '12px 0', lineHeight: 1.6 }}>
+              Vas a donar <b>{donAmount} AquaCoins</b> al proyecto de <b>{donProj.loc}</b>.<br />
+              Te quedarán <b>{fmtCL(state.balance - donAmount)} AquaCoins</b>.
+            </div>
+            <button onClick={confirmDon} style={bigBtn('', { color: COLORS.good })}>Sí, donar</button>
+            <button onClick={() => setDonAmount(null)} style={bigBtn('', { ghost: true, mt: 10 })}>No, volver atrás</button>
+          </>
+          }
+        </BottomSheet>
+        <HelpSheet open={help} onClose={() => setHelp(false)} help={SENIOR_HELP.donar} />
+      </div>);
+  }
+
+  // ── REPORTES (mapa) ──
+  if (page === 'reportes') {
+    return (
+      <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+        <SeniorHeader title="Reportar fuga" onBack={goHome} onHelp={() => setHelp(true)} />
+        <div style={{ flex: 1, minHeight: 0 }}>
+          <ScreenReportes dark={dark} />
+        </div>
+        <HelpSheet open={help} onClose={() => setHelp(false)} help={SENIOR_HELP.reportes} />
+      </div>);
+  }
+
+  // ── CONSEJOS ──
+  return (
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <SeniorHeader title="Consejos" onBack={goHome} onHelp={() => setHelp(true)} />
+      {scroller(
+        TIPS.map((tip, i) =>
+        <Card key={i} style={{ padding: 18, marginBottom: 12 }}>
+            <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+              <span style={{
+              width: 34, height: 34, borderRadius: 999, background: COLORS.aquaSoft,
+              color: COLORS.primary, fontSize: 16, fontWeight: 800, flexShrink: 0,
+              display: 'flex', alignItems: 'center', justifyContent: 'center'
+            }}>{i + 1}</span>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 18, fontWeight: 800, color: COLORS.ink, letterSpacing: -0.2, lineHeight: 1.3 }}>{tip.t}</div>
+                <div style={{ fontSize: 15.5, color: COLORS.inkSoft, marginTop: 5, lineHeight: 1.5 }}>{tip.d}</div>
+              </div>
+            </div>
+          </Card>
+        )
+      )}
+      <HelpSheet open={help} onClose={() => setHelp(false)} help={SENIOR_HELP.consejos} />
+    </div>);
 }
 
 // ─────────────────────────────────────────────────────────
@@ -1228,6 +1952,7 @@ function App() {
   const [visited, setVisited] = React.useState({ inicio: true });
   const [state, dispatch] = React.useReducer(reducer, undefined, loadState);
   const [toast, setToast] = React.useState(null);
+  const [profileOpen, setProfileOpen] = React.useState(false);
   const toastTimer = React.useRef(null);
 
   const showToast = React.useCallback((text) => {
@@ -1253,26 +1978,51 @@ function App() {
   };
 
   const bg = `linear-gradient(180deg, ${base.bgTop} 0%, ${base.bgTop} 30%, ${base.bgBot} 100%)`;
+  const shellStyle = {
+    position: 'relative', height: '100%', overflow: 'hidden',
+    background: bg, color: COLORS.ink,
+    fontFamily: '"Geist", ui-sans-serif, -apple-system, system-ui, sans-serif'
+  };
+  const texture =
+  <div style={{
+    position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 0,
+    backgroundImage: PAPER_TEXTURE, backgroundRepeat: 'repeat',
+    mixBlendMode: dark ? 'screen' : 'multiply', opacity: dark ? 0.5 : 1
+  }} />;
 
+  // 1) Primer uso: registro de nombre
+  if (!state.userName) {
+    return (
+      <div id="app" style={shellStyle}>
+        {texture}
+        <Welcome dark={dark} onDone={(name) => dispatch({ type: 'setName', name })} />
+      </div>);
+  }
+
+  // 2) Modo fácil (adultos mayores)
+  if (state.seniorMode) {
+    return (
+      <div id="app" style={shellStyle}>
+        {texture}
+        <div style={{ position: 'relative', zIndex: 1, height: '100%' }}>
+          <SeniorApp state={state} dispatch={dispatch} dark={dark} showToast={showToast} />
+        </div>
+        <Toast msg={toast} />
+      </div>);
+  }
+
+  // 3) Modo normal
   const screens = {
-    inicio: <ScreenInicio state={state} dispatch={dispatch} goPremios={() => switchTab('premios')} />,
+    inicio: <ScreenInicio state={state} dispatch={dispatch} goPremios={() => switchTab('premios')} openProfile={() => setProfileOpen(true)} />,
     premios: <ScreenPremios state={state} dispatch={dispatch} showToast={showToast} />,
     comunidad: <ScreenComunidad state={state} dispatch={dispatch} showToast={showToast} active={tab === 'comunidad' || !!visited.comunidad} />,
     reportes: <ScreenReportes dark={dark} />
   };
+  const showTut = !state.tutorialsSeen[tab] && !profileOpen;
 
   return (
-    <div id="app" style={{
-      position: 'relative', height: '100%', overflow: 'hidden',
-      background: bg, color: COLORS.ink,
-      fontFamily: '"Geist", ui-sans-serif, -apple-system, system-ui, sans-serif'
-    }}>
-      {/* textura papel */}
-      <div style={{
-        position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 0,
-        backgroundImage: PAPER_TEXTURE, backgroundRepeat: 'repeat',
-        mixBlendMode: dark ? 'screen' : 'multiply', opacity: dark ? 0.5 : 1
-      }} />
+    <div id="app" style={shellStyle}>
+      {texture}
 
       {TABS.map((t) => {
         if (!visited[t.id]) return null;
@@ -1294,6 +2044,12 @@ function App() {
       })}
 
       <TabBar active={tab} onChange={switchTab} dark={dark} />
+      <ProfileSheet open={profileOpen} onClose={() => setProfileOpen(false)}
+      state={state} dispatch={dispatch} showToast={showToast} />
+      {showTut &&
+      <Tutorial screen={tab} dark={dark}
+      onDone={() => dispatch({ type: 'tutorialSeen', screen: tab })} />
+      }
       <Toast msg={toast} />
     </div>);
 }

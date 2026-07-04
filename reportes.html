@@ -172,6 +172,27 @@
   .type-card .tc-desc{font-size:10.5px;color:var(--texto-suave);font-weight:600;margin-top:1px}
   .type-card .tc-arrow{margin-left:auto;color:var(--texto-suave)}
 
+  /* ---------- Modo "elegir ubicación" ---------- */
+  body.placing .fab{display:none}
+  body.placing .pin{pointer-events:none;opacity:.45}
+  body.placing .map-wrap{cursor:crosshair}
+  .cancel-place{
+    position:absolute;left:50%;transform:translateX(-50%);bottom:24px;z-index:25;
+    display:none;align-items:center;gap:8px;background:var(--superficie);color:var(--texto);
+    border:1.5px solid var(--borde);padding:13px 22px;border-radius:16px;
+    font-family:'Sora',sans-serif;font-weight:700;font-size:13px;cursor:pointer;
+    box-shadow:0 10px 26px -8px rgba(0,0,0,.35);
+  }
+  body.placing .cancel-place{display:flex}
+  .hint.placing-hint{background:var(--azul-grad)}
+  .target-ring{
+    position:absolute;width:36px;height:36px;border-radius:50%;border:3px dashed var(--aqua);
+    transform:translate(-50%,-50%);pointer-events:none;z-index:14;display:none;
+    animation:targetspin 6s linear infinite;
+  }
+  body.placing .target-ring{display:block}
+  @keyframes targetspin{to{transform:translate(-50%,-50%) rotate(360deg)}}
+
   /* toast */
   .toast{
     position:absolute;top:64px;left:50%;transform:translateX(-50%) translateY(-20px);
@@ -266,6 +287,8 @@
 
     <div class="hint" id="hint"><span class="pulse"></span><span id="hintTxt">Toca un reporte para ver su estado</span></div>
     <div id="pins"></div>
+    <div class="target-ring" id="targetRing" style="left:50%;top:45%"></div>
+    <div class="cancel-place" id="cancelPlace">✕ Cancelar</div>
     <div class="toast" id="toast"></div>
 
     <div class="fab" id="fab">
@@ -313,7 +336,7 @@
       <div class="modal">
         <div class="grab"></div>
         <h3>¿Qué quieres reportar?</h3>
-        <p>Tu reporte se ubicará con tu ubicación actual</p>
+        <p>Elige el tipo y luego toca el punto exacto del mapa donde está el problema</p>
         <div class="type-grid" id="typeGrid"></div>
       </div>
     </div>
@@ -390,10 +413,20 @@ const BANNERS = {
 
 /* posiciones iniciales de reportes ya existentes en el mapa */
 const SPOTS = [
-  {id:'a', type:'fuga',    x:46, y:42, stage:0},
-  {id:'b', type:'rebalse', x:72, y:32, stage:2},
-  {id:'c', type:'grifo',   x:30, y:62, stage:3}
+  {id:'a', type:'fuga',    x:46, y:42, stage:0, ts:Date.now()-9*60000},
+  {id:'b', type:'rebalse', x:72, y:32, stage:2, ts:Date.now()-52*60000},
+  {id:'c', type:'grifo',   x:30, y:62, stage:3, ts:Date.now()-26*3600000}
 ];
+
+function timeAgo(ts){
+  if(!ts) return 'hace un tiempo';
+  const m=Math.round((Date.now()-ts)/60000);
+  if(m<1) return 'recién';
+  if(m<60) return 'hace '+m+' min';
+  const h=Math.round(m/60);
+  if(h<24) return 'hace '+h+' h';
+  return 'hace '+Math.round(h/24)+' días';
+}
 
 /* ===== Persistencia local: los reportes sobreviven al cerrar la app ===== */
 const SAVE_KEY='aquareward.reportes.v1';
@@ -477,7 +510,7 @@ function paintSheet(s){
   document.getElementById('sheetIco').innerHTML=ICONS[s.type];
   document.getElementById('sheetTitle').textContent=t.name;
   document.getElementById('sheetMeta').innerHTML=
-    `<svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M12 21s7-6.6 7-12a7 7 0 1 0-14 0c0 5.4 7 12 7 12Z" stroke="#5E7088" stroke-width="1.6"/><circle cx="12" cy="9" r="2.4" stroke="#5E7088" stroke-width="1.6"/></svg>${t.addr} · hace 4 min`;
+    `<svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M12 21s7-6.6 7-12a7 7 0 1 0-14 0c0 5.4 7 12 7 12Z" stroke="#5E7088" stroke-width="1.6"/><circle cx="12" cy="9" r="2.4" stroke="#5E7088" stroke-width="1.6"/></svg>${s.addr||t.addr} · ${timeAgo(s.ts)}`;
 
   const cfg=STAGE[s.stage];
   setSteps(s.stage);
@@ -494,7 +527,8 @@ function paintSheet(s){
   btn.className='action-btn '+(cfg.cls||'');
   btn.textContent=cfg.btn;
   document.getElementById('actionHint').textContent=cfg.hint;
-  btn.onclick=()=>advance(s);
+  // reporte resuelto: el botón cierra la hoja en vez de intentar avanzar
+  btn.onclick = s.stage>=STAGE.length-1 ? closeSheet : ()=>advance(s);
 }
 
 function openSheet(s){
@@ -529,17 +563,57 @@ function buildModal(){
     c.innerHTML=`<div class="tc-ico" style="background:${t.color}1A">${ICONS[k]}</div>
       <div><div class="tc-name">${t.name}</div><div class="tc-desc">${t.desc}</div></div>
       <div class="tc-arrow"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>`;
-    c.onclick=()=>createReport(k);
+    c.onclick=()=>startPlacing(k);
     typeGrid.appendChild(c);
   });
 }
 document.getElementById('fab').onclick=()=>{modalBg.classList.add('show')};
 modalBg.onclick=(e)=>{if(e.target===modalBg)modalBg.classList.remove('show')};
 
-function createReport(type){
+/* ---- elegir la ubicación exacta en el mapa ---- */
+let placing=null; // tipo seleccionado, a la espera de que el usuario toque el mapa
+const mapWrap=document.getElementById('mapWrap');
+const targetRing=document.getElementById('targetRing');
+const cancelPlace=document.getElementById('cancelPlace');
+const hintTxt=document.getElementById('hintTxt');
+
+function startPlacing(type){
   modalBg.classList.remove('show');
-  // ubica un nuevo pin cerca del centro
-  const ns={id:'n'+(nid++), type, x:50+(Math.random()*16-8), y:50+(Math.random()*14-7), stage:0};
+  closeSheet();
+  placing=type;
+  document.body.classList.add('placing');
+  hint.classList.add('placing-hint');
+  hintTxt.textContent='Toca el punto exacto del mapa donde está el problema';
+  hint.style.opacity='1';
+}
+function stopPlacing(){
+  placing=null;
+  document.body.classList.remove('placing');
+  hint.classList.remove('placing-hint');
+  hintTxt.textContent='Toca un reporte para ver su estado';
+}
+cancelPlace.onclick=(e)=>{e.stopPropagation();stopPlacing();};
+
+mapWrap.addEventListener('pointermove',(e)=>{
+  if(!placing) return;
+  const r=mapWrap.getBoundingClientRect();
+  targetRing.style.left=((e.clientX-r.left)/r.width*100)+'%';
+  targetRing.style.top=((e.clientY-r.top)/r.height*100)+'%';
+});
+
+mapWrap.addEventListener('click',(e)=>{
+  if(!placing) return;
+  if(e.target.closest('.cancel-place')||e.target.closest('.hint')||e.target.closest('.sheet')||e.target.closest('.modal-bg')) return;
+  const r=mapWrap.getBoundingClientRect();
+  const x=Math.min(95,Math.max(5,(e.clientX-r.left)/r.width*100));
+  const y=Math.min(90,Math.max(8,(e.clientY-r.top)/r.height*100));
+  const type=placing;
+  stopPlacing();
+  createReport(type,x,y);
+});
+
+function createReport(type,x,y){
+  const ns={id:'n'+(nid++), type, x, y, stage:0, ts:Date.now(), addr:'Ubicación marcada por ti'};
   SPOTS.push(ns);
   renderPins();
   showToast('Reporte creado · tú eres el 1er vecino', TYPES[type].color);

@@ -6,16 +6,23 @@ persistente y funcionamiento offline.
 
 ## Qué hace
 
+- **Bienvenida** — al primer uso pide tu nombre y te registra como usuario local;
+  el avatar (arriba a la derecha en Inicio) abre tu perfil.
+- **Mini tutoriales** — la primera vez que visitas cada pantalla, un tutorial
+  breve explica sus funciones principales (repetibles desde el perfil).
 - **Inicio** — saldo de AquaCoins en vivo, gauge de consumo mensual (mes y días
-  restantes reales), cinta de confianza Essbio y tips de ahorro rotativos.
+  restantes reales), cinta de confianza Essbio y 10 tips de ahorro rotativos.
 - **Premios** — catálogo con filtros funcionales por categoría, canje con hoja de
   confirmación que **descuenta el saldo de verdad**, historial "Mis canjes" y
   Multiplicador ×2 con vigencia real de 7 días.
-- **Comunidad** — donaciones en AquaCoins o en m³ de agua (equivalente en pesos)
-  que **avanzan la barra del proyecto**, registro de tu aporte acumulado y estado
-  de meta alcanzada al llegar al 100%.
-- **Reportes** — mapa comunitario de fugas: los reportes que creas y sus estados
-  **quedan guardados** en el dispositivo.
+- **Comunidad** — dos proyectos (Santa Bárbara y Cabrero) en un **carrusel
+  deslizable**; donaciones en AquaCoins o m³ que avanzan la barra de cada
+  proyecto, con registro de tu aporte acumulado por proyecto.
+- **Reportes** — mapa comunitario de fugas: eliges el **punto exacto del mapa**
+  al reportar; los reportes y sus estados quedan guardados en el dispositivo.
+- **Modo fácil** — interfaz simplificada para adultos mayores (letra grande,
+  botones de ayuda "?" en cada pantalla, flujos de un paso). Se activa desde el
+  avatar de Inicio → "Modo fácil".
 - **Modo oscuro automático** según el sistema (incluye el mapa de Reportes).
 
 Todo el estado vive en `localStorage` — no hay servidor; los datos son de demo.

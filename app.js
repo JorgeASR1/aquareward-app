@@ -364,22 +364,54 @@ const Icon = {
 
 // ───────── Estado persistente ─────────
 const STORE_KEY = 'aquareward.v1';
-const PROJECT_GOAL = 200000; // AC
 const CLP_PER_M3 = 1180; // tarifa referencial Essbio
 const M3_TO_AC = 100; // equivalencia para la barra del proyecto
 const DAY = 86400000;
+
+// Proyectos comunitarios — en Comunidad se desliza entre tarjetas
+const PROJECTS = [{
+  id: 'sb',
+  title: 'Red agua potable rural',
+  loc: 'Santa Bárbara',
+  fam: '84 familias',
+  img: 'assets/tubul-rural.jpg',
+  goal: 200000,
+  days: 23
+}, {
+  id: 'cb',
+  title: 'Estanques de acumulación',
+  loc: 'Cabrero',
+  fam: '52 familias',
+  img: 'assets/cabrero-rural.jpg',
+  goal: 150000,
+  days: 45
+}];
 function freshState() {
   return {
-    v: 1,
+    v: 2,
+    userName: '',
+    // '' → aún sin registrar (pantalla de bienvenida)
+    seniorMode: false,
+    // modo fácil para adultos mayores
+    tutorialsSeen: {},
+    // { inicio: true, ... } mini tutoriales por pantalla
     balance: 1240,
     redemptions: [],
     // { id, title, cost, ts }
-    projectFunded: 134000,
-    donors: 312,
-    myAC: 0,
-    // total AC donados por el usuario
-    myCLP: 0,
-    // total $ donados por el usuario
+    projects: {
+      sb: {
+        funded: 134000,
+        donors: 312,
+        myAC: 0,
+        myCLP: 0
+      },
+      cb: {
+        funded: 61000,
+        donors: 147,
+        myAC: 0,
+        myCLP: 0
+      }
+    },
     multiplierUntil: 0,
     tipIndex: 0
   };
@@ -389,16 +421,81 @@ function loadState() {
     const raw = localStorage.getItem(STORE_KEY);
     if (raw) {
       const s = JSON.parse(raw);
-      if (s && s.v === 1) return {
-        ...freshState(),
-        ...s
-      };
+      if (s && s.v === 2) {
+        const f = freshState();
+        return {
+          ...f,
+          ...s,
+          projects: {
+            ...f.projects,
+            ...(s.projects || {})
+          }
+        };
+      }
+      if (s && s.v === 1) {
+        // migración v1 → v2: el proyecto único pasa a ser "Santa Bárbara"
+        const f = freshState();
+        return {
+          ...f,
+          balance: typeof s.balance === 'number' ? s.balance : f.balance,
+          redemptions: s.redemptions || [],
+          multiplierUntil: s.multiplierUntil || 0,
+          tipIndex: s.tipIndex || 0,
+          projects: {
+            ...f.projects,
+            sb: {
+              funded: typeof s.projectFunded === 'number' ? s.projectFunded : f.projects.sb.funded,
+              donors: typeof s.donors === 'number' ? s.donors : f.projects.sb.donors,
+              myAC: s.myAC || 0,
+              myCLP: s.myCLP || 0
+            }
+          }
+        };
+      }
     }
   } catch (e) {/* almacenamiento no disponible: la app funciona en memoria */}
   return freshState();
 }
+function donateTo(s, pid, acAmount, clpAmount) {
+  const p = s.projects[pid];
+  const proj = PROJECTS.find(x => x.id === pid);
+  if (!p || !proj) return s;
+  return {
+    ...s.projects,
+    [pid]: {
+      ...p,
+      funded: Math.min(proj.goal, p.funded + acAmount),
+      donors: p.donors + (p.myAC || p.myCLP ? 0 : 1),
+      myAC: p.myAC + (clpAmount ? 0 : acAmount),
+      myCLP: p.myCLP + clpAmount
+    }
+  };
+}
 function reducer(s, a) {
   switch (a.type) {
+    case 'setName':
+      return {
+        ...s,
+        userName: String(a.name || '').trim().slice(0, 24)
+      };
+    case 'setSenior':
+      return {
+        ...s,
+        seniorMode: !!a.on
+      };
+    case 'tutorialSeen':
+      return {
+        ...s,
+        tutorialsSeen: {
+          ...s.tutorialsSeen,
+          [a.screen]: true
+        }
+      };
+    case 'resetTutorials':
+      return {
+        ...s,
+        tutorialsSeen: {}
+      };
     case 'redeem':
       {
         const r = a.reward;
@@ -422,18 +519,14 @@ function reducer(s, a) {
         return {
           ...s,
           balance: s.balance - a.amount,
-          projectFunded: Math.min(PROJECT_GOAL, s.projectFunded + a.amount),
-          donors: s.donors + (s.myAC || s.myCLP ? 0 : 1),
-          myAC: s.myAC + a.amount
+          projects: donateTo(s, a.pid, a.amount, 0)
         };
       }
     case 'donateM3':
       {
         return {
           ...s,
-          projectFunded: Math.min(PROJECT_GOAL, s.projectFunded + a.m3 * M3_TO_AC),
-          donors: s.donors + (s.myAC || s.myCLP ? 0 : 1),
-          myCLP: s.myCLP + a.m3 * CLP_PER_M3
+          projects: donateTo(s, a.pid, a.m3 * M3_TO_AC, a.m3 * CLP_PER_M3)
         };
       }
     case 'nextTip':
@@ -449,6 +542,9 @@ function reducer(s, a) {
 // ───────── Utilidades ─────────
 const fmtCL = n => Math.round(n).toLocaleString('es-CL');
 const NUMFONT = '"Oswald", "Geist", ui-sans-serif, sans-serif';
+const initials = name => (name || '').trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '·';
+const firstName = name => (name || '').trim().split(/\s+/)[0] || '';
+const logoSrc = dark => dark ? 'assets/logo-dark.png' : 'assets/logo-light.png';
 function useSystemDark() {
   const mq = React.useMemo(() => window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null, []);
   const [dark, setDark] = React.useState(mq ? mq.matches : false);
@@ -762,7 +858,7 @@ function TrustRibbon({
       color: COLORS.ink,
       letterSpacing: -0.1
     }
-  }, "Medici\xF3n verificada"), /*#__PURE__*/React.createElement("div", {
+  }, "Medición verificada"), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11,
       color: COLORS.inkMuted,
@@ -806,6 +902,21 @@ const TIPS = [{
 }, {
   t: 'Usa cargas completas',
   d: 'Lavadora y lavavajillas con carga completa ahorran hasta 60 L por ciclo frente a cargas parciales.'
+}, {
+  t: 'Revisa el estanque del WC',
+  d: 'Un WC con fuga silenciosa pierde hasta 200 L al día. Echa unas gotas de colorante al estanque: si llegan a la taza sin tirar la cadena, hay fuga.'
+}, {
+  t: 'Instala aireadores en las llaves',
+  d: 'Cuestan poco y mezclan aire con agua: reducen el consumo de cada llave hasta 40% sin que notes la diferencia.'
+}, {
+  t: 'Reutiliza el agua de las verduras',
+  d: 'El agua con que lavas frutas y verduras sirve perfecto para regar tus plantas. Júntala en un recipiente y dale una segunda vida.'
+}, {
+  t: 'Descongela en el refrigerador',
+  d: 'Descongelar alimentos bajo la llave gasta hasta 15 L por vez. Planifica y descongela en el refrigerador desde la noche anterior.'
+}, {
+  t: 'Barre en vez de manguerear',
+  d: 'Limpiar el patio o la vereda con escoba en vez de manguera ahorra unos 200 L cada vez. El resultado es el mismo.'
 }];
 function GaugeRing({
   value = 8.7,
@@ -909,7 +1020,7 @@ function GaugeRing({
       fontWeight: 600,
       marginLeft: 4
     }
-  }, "m\xB3")), /*#__PURE__*/React.createElement("div", {
+  }, "m³")), /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 8,
       display: 'inline-flex',
@@ -950,7 +1061,8 @@ function BalanceDisplay({
 function ScreenInicio({
   state,
   dispatch,
-  goPremios
+  goPremios,
+  openProfile
 }) {
   const h = new Date().getHours();
   const greeting = h < 12 ? '¡Hola, buen día!' : h < 20 ? '¡Hola, buenas tardes!' : '¡Hola, buenas noches!';
@@ -968,21 +1080,30 @@ function ScreenInicio({
     }
   }, /*#__PURE__*/React.createElement(AppHeader, {
     subtitle: greeting,
-    title: "Mati A.",
-    right: /*#__PURE__*/React.createElement("div", {
+    title: state.userName,
+    right: /*#__PURE__*/React.createElement("button", {
+      onClick: () => {
+        haptic();
+        openProfile();
+      },
+      "aria-label": "Tu perfil y ajustes",
       style: {
-        width: 38,
-        height: 38,
+        width: 40,
+        height: 40,
         borderRadius: 999,
+        border: 'none',
+        cursor: 'pointer',
         background: `linear-gradient(135deg, ${COLORS.aqua}, ${COLORS.primary})`,
         color: '#fff',
         fontWeight: 700,
         fontSize: 14,
+        fontFamily: 'inherit',
         display: 'flex',
         alignItems: 'center',
-        justifyContent: 'center'
+        justifyContent: 'center',
+        boxShadow: '0 2px 10px rgba(14,159,190,0.35)'
       }
-    }, "MA")
+    }, initials(state.userName))
   }), /*#__PURE__*/React.createElement("div", {
     style: {
       padding: '4px 16px 14px'
@@ -1059,7 +1180,7 @@ function ScreenInicio({
       fontWeight: 700,
       color: '#fff'
     }
-  }, "\xD72 activo \xB7 ", multiDays, " d"))), /*#__PURE__*/React.createElement("button", {
+  }, "×2 activo · ", multiDays, " d"))), /*#__PURE__*/React.createElement("button", {
     onClick: goPremios,
     style: {
       border: '1px solid rgba(255,255,255,0.3)',
@@ -1072,7 +1193,7 @@ function ScreenInicio({
       cursor: 'pointer',
       fontFamily: 'inherit'
     }
-  }, "Canjear \u2192")))), /*#__PURE__*/React.createElement("div", {
+  }, "Canjear →")))), /*#__PURE__*/React.createElement("div", {
     style: {
       padding: '0 16px 14px'
     }
@@ -1099,7 +1220,7 @@ function ScreenInicio({
       color: COLORS.inkMuted,
       fontWeight: 600
     }
-  }, daysLeft, " d\xEDas restantes")), /*#__PURE__*/React.createElement("div", {
+  }, daysLeft, " días restantes")), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       justifyContent: 'center',
@@ -1155,7 +1276,7 @@ function ScreenInicio({
       fontWeight: 600
     }
   }, s.s)))))), /*#__PURE__*/React.createElement(TrustRibbon, {
-    note: "Essbio Mide \xB7 lectura oficial del medidor"
+    note: "Essbio Mide · lectura oficial del medidor"
   }), /*#__PURE__*/React.createElement("div", {
     style: {
       padding: '0 16px 14px'
@@ -1230,7 +1351,7 @@ function ScreenInicio({
       cursor: 'pointer',
       fontFamily: 'inherit'
     }
-  }, "Entendido \xB7 ver otro tip"))))));
+  }, "Entendido · ver otro tip"))))));
 }
 
 // ─────────────────────────────────────────────────────────
@@ -1368,7 +1489,7 @@ function RewardRowInline({
       padding: '2px 6px',
       borderRadius: 4
     }
-  }, "\u2713 \xD7", redeemedCount)), /*#__PURE__*/React.createElement("div", {
+  }, "✓ ×", redeemedCount)), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11.5,
       color: COLORS.inkMuted,
@@ -1441,7 +1562,7 @@ function ScreenPremios({
       paddingBottom: 24
     }
   }, /*#__PURE__*/React.createElement(AppHeader, {
-    subtitle: "Cat\xE1logo de recompensas",
+    subtitle: "Catálogo de recompensas",
     title: "Premios",
     right: /*#__PURE__*/React.createElement("div", {
       style: {
@@ -1547,7 +1668,7 @@ function ScreenPremios({
       color: COLORS.inkSoft,
       marginTop: 2
     }
-  }, "Aplicable al pr\xF3ximo ciclo. 124 personas lo canjearon esta semana."))), /*#__PURE__*/React.createElement("div", {
+  }, "Aplicable al próximo ciclo. 124 personas lo canjearon esta semana."))), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       alignItems: 'center',
@@ -1684,7 +1805,7 @@ function ScreenPremios({
         fontWeight: 700,
         color: COLORS.danger
       }
-    }, "\u2212", fmtCL(r.cost), " AC"));
+    }, "−", fmtCL(r.cost), " AC"));
   }))), /*#__PURE__*/React.createElement(BottomSheet, {
     open: !!pending,
     onClose: () => setPending(null)
@@ -1726,7 +1847,7 @@ function ScreenPremios({
     label: "Saldo actual",
     value: `${fmtCL(balance)} AC`
   }), /*#__PURE__*/React.createElement(SheetRow, {
-    label: "Saldo despu\xE9s del canje",
+    label: "Saldo después del canje",
     value: `${fmtCL(balance - pending.cost)} AC`,
     strong: true
   }), /*#__PURE__*/React.createElement(SheetButton, {
@@ -1756,51 +1877,23 @@ function ImpactCounter({
     }
   }, fmtCL(n));
 }
-function ScreenComunidad({
-  state,
-  dispatch,
-  showToast,
-  active
+
+// Tarjeta de proyecto — cada una mantiene su propio selector de aporte
+function ProjectCard({
+  proj,
+  pstate,
+  balance,
+  onConfirm
 }) {
   const [donMode, setDonMode] = React.useState('ac'); // 'ac' | 'm3'
   const [donAC, setDonAC] = React.useState(50);
   const [donM3, setDonM3] = React.useState(2);
-  const [confirming, setConfirming] = React.useState(false);
   const clp = n => n.toLocaleString('es-CL');
-  const funded = state.projectFunded;
-  const pct = Math.min(funded / PROJECT_GOAL, 1);
-  const complete = funded >= PROJECT_GOAL;
-  const canDonateAC = state.balance >= donAC;
-  const confirmDonation = () => {
-    haptic();
-    if (donMode === 'ac') {
-      if (!canDonateAC) return;
-      dispatch({
-        type: 'donateAC',
-        amount: donAC
-      });
-      showToast(`¡Gracias! Aportaste ${donAC} AC al proyecto`);
-    } else {
-      dispatch({
-        type: 'donateM3',
-        m3: donM3
-      });
-      showToast(`¡Gracias! Aportaste $${clp(donM3 * CLP_PER_M3)} al proyecto`);
-    }
-    setConfirming(false);
-  };
-  return /*#__PURE__*/React.createElement("div", {
-    style: {
-      paddingBottom: 24
-    }
-  }, /*#__PURE__*/React.createElement(AppHeader, {
-    subtitle: "Tu impacto en la regi\xF3n",
-    title: "Comunidad"
-  }), /*#__PURE__*/React.createElement("div", {
-    style: {
-      padding: '0 16px 14px'
-    }
-  }, /*#__PURE__*/React.createElement(Card, {
+  const funded = pstate.funded;
+  const pct = Math.min(funded / proj.goal, 1);
+  const complete = funded >= proj.goal;
+  const canDonateAC = balance >= donAC;
+  return /*#__PURE__*/React.createElement(Card, {
     style: {
       padding: 0,
       overflow: 'hidden'
@@ -1810,7 +1903,7 @@ function ScreenComunidad({
       height: 150,
       position: 'relative',
       overflow: 'hidden',
-      backgroundImage: 'url("assets/tubul-rural.jpg")',
+      backgroundImage: `url("${proj.img}")`,
       backgroundSize: 'cover',
       backgroundPosition: 'center 40%'
     }
@@ -1834,7 +1927,7 @@ function ScreenComunidad({
       fontWeight: 600,
       textShadow: '0 1px 4px rgba(0,0,0,0.5)'
     }
-  }, Icon.pipe(18), " Santa B\xE1rbara \xB7 Regi\xF3n del Biob\xEDo"), /*#__PURE__*/React.createElement("div", {
+  }, Icon.pipe(18), " ", proj.loc, " · Región del Biobío"), /*#__PURE__*/React.createElement("div", {
     style: {
       position: 'absolute',
       top: 12,
@@ -1880,13 +1973,13 @@ function ScreenComunidad({
       letterSpacing: -0.3,
       lineHeight: 1.25
     }
-  }, "Red agua potable rural"), /*#__PURE__*/React.createElement("div", {
+  }, proj.title), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 13,
       color: COLORS.inkSoft,
       marginTop: 2
     }
-  }, "Santa B\xE1rbara \xB7 84 familias"), /*#__PURE__*/React.createElement("div", {
+  }, proj.loc, " · ", proj.fam), /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 14
     }
@@ -1909,7 +2002,7 @@ function ScreenComunidad({
       color: COLORS.inkMuted,
       fontWeight: 600
     }
-  }, fmtCL(funded), " / ", fmtCL(PROJECT_GOAL), " AC")), /*#__PURE__*/React.createElement("div", {
+  }, fmtCL(funded), " / ", fmtCL(proj.goal), " AC")), /*#__PURE__*/React.createElement("div", {
     style: {
       height: 10,
       borderRadius: 999,
@@ -1947,11 +2040,11 @@ function ScreenComunidad({
     style: {
       color: COLORS.ink
     }
-  }, fmtCL(state.donors)), " donantes"), /*#__PURE__*/React.createElement("span", null, "Finaliza en ", /*#__PURE__*/React.createElement("b", {
+  }, fmtCL(pstate.donors)), " donantes"), /*#__PURE__*/React.createElement("span", null, "Finaliza en ", /*#__PURE__*/React.createElement("b", {
     style: {
       color: COLORS.ink
     }
-  }, "23 d\xEDas"))), (state.myAC > 0 || state.myCLP > 0) && /*#__PURE__*/React.createElement("div", {
+  }, proj.days, " días"))), (pstate.myAC > 0 || pstate.myCLP > 0) && /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 10,
       display: 'inline-flex',
@@ -1964,7 +2057,7 @@ function ScreenComunidad({
       fontSize: 11.5,
       fontWeight: 700
     }
-  }, "\u2665 Tu aporte: ", state.myAC > 0 ? `${fmtCL(state.myAC)} AC` : '', state.myAC > 0 && state.myCLP > 0 ? ' · ' : '', state.myCLP > 0 ? `$${fmtCL(state.myCLP)}` : '')), !complete && /*#__PURE__*/React.createElement("div", {
+  }, "♥ Tu aporte: ", pstate.myAC > 0 ? `${fmtCL(pstate.myAC)} AC` : '', pstate.myAC > 0 && pstate.myCLP > 0 ? ' · ' : '', pstate.myCLP > 0 ? `$${fmtCL(pstate.myCLP)}` : '')), !complete && /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 18,
       padding: 14,
@@ -2065,7 +2158,7 @@ function ScreenComunidad({
       fontSize: 14,
       fontWeight: 800
     }
-  }, v, " m\xB3"), /*#__PURE__*/React.createElement("div", {
+  }, v, " m³"), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 10,
       fontWeight: 600,
@@ -2074,7 +2167,7 @@ function ScreenComunidad({
     }
   }, "$", clp(v * CLP_PER_M3))))), /*#__PURE__*/React.createElement("button", {
     disabled: donMode === 'ac' && !canDonateAC,
-    onClick: () => setConfirming(true),
+    onClick: () => onConfirm(donMode, donMode === 'ac' ? donAC : donM3),
     style: {
       width: '100%',
       marginTop: 10,
@@ -2114,13 +2207,107 @@ function ScreenComunidad({
       fontWeight: 700,
       color: COLORS.good
     }
-  }, "\uD83C\uDF89 \xA1Meta alcanzada!"), /*#__PURE__*/React.createElement("div", {
+  }, "🎉 ¡Meta alcanzada!"), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 12,
       color: COLORS.inkSoft,
       marginTop: 4
     }
-  }, "Gracias a ", fmtCL(state.donors), " donantes, el proyecto est\xE1 100% financiado."))))), /*#__PURE__*/React.createElement("div", {
+  }, "Gracias a ", fmtCL(pstate.donors), " donantes, el proyecto está 100% financiado."))));
+}
+function ScreenComunidad({
+  state,
+  dispatch,
+  showToast,
+  active
+}) {
+  const [pending, setPending] = React.useState(null); // { proj, mode, amount }
+  const [page, setPage] = React.useState(0);
+  const clp = n => n.toLocaleString('es-CL');
+  const canConfirm = !pending || pending.mode !== 'ac' || state.balance >= pending.amount;
+  const confirmDonation = () => {
+    if (!pending) return;
+    haptic();
+    if (pending.mode === 'ac') {
+      if (state.balance < pending.amount) return;
+      dispatch({
+        type: 'donateAC',
+        pid: pending.proj.id,
+        amount: pending.amount
+      });
+      showToast(`¡Gracias! Aportaste ${pending.amount} AC a ${pending.proj.loc}`);
+    } else {
+      dispatch({
+        type: 'donateM3',
+        pid: pending.proj.id,
+        m3: pending.amount
+      });
+      showToast(`¡Gracias! Aportaste $${clp(pending.amount * CLP_PER_M3)} a ${pending.proj.loc}`);
+    }
+    setPending(null);
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      paddingBottom: 24
+    }
+  }, /*#__PURE__*/React.createElement(AppHeader, {
+    subtitle: "Tu impacto en la región",
+    title: "Comunidad"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "ar-carousel",
+    onScroll: e => {
+      const el = e.currentTarget;
+      setPage(Math.round(el.scrollLeft / el.clientWidth));
+    },
+    style: {
+      display: 'flex',
+      overflowX: 'auto',
+      scrollSnapType: 'x mandatory',
+      scrollbarWidth: 'none',
+      gap: 12,
+      padding: '0 16px'
+    }
+  }, PROJECTS.map(p => /*#__PURE__*/React.createElement("div", {
+    key: p.id,
+    style: {
+      flex: '0 0 100%',
+      scrollSnapAlign: 'center',
+      minWidth: 0
+    }
+  }, /*#__PURE__*/React.createElement(ProjectCard, {
+    proj: p,
+    pstate: state.projects[p.id],
+    balance: state.balance,
+    onConfirm: (mode, amount) => setPending({
+      proj: p,
+      mode,
+      amount
+    })
+  })))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      justifyContent: 'center',
+      alignItems: 'center',
+      gap: 6,
+      padding: '12px 0 14px'
+    }
+  }, PROJECTS.map((p, i) => /*#__PURE__*/React.createElement("span", {
+    key: p.id,
+    style: {
+      width: page === i ? 20 : 7,
+      height: 7,
+      borderRadius: 999,
+      background: page === i ? COLORS.primary : COLORS.divider,
+      transition: 'all .3s'
+    }
+  })), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      color: COLORS.inkMuted,
+      fontWeight: 600,
+      marginLeft: 8
+    }
+  }, "Desliza para ver más proyectos")), /*#__PURE__*/React.createElement("div", {
     style: {
       padding: '0 16px 14px'
     }
@@ -2185,7 +2372,7 @@ function ScreenComunidad({
       marginTop: 6,
       lineHeight: 1.4
     }
-  }, "Equivalen a ", /*#__PURE__*/React.createElement("b", null, "71 d\xEDas de agua potable"), " para una familia rural de 4 personas."), /*#__PURE__*/React.createElement("div", {
+  }, "Equivalen a ", /*#__PURE__*/React.createElement("b", null, "71 días de agua potable"), " para una familia rural de 4 personas."), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'grid',
       gridTemplateColumns: '1fr 1fr 1fr',
@@ -2216,7 +2403,7 @@ function ScreenComunidad({
       opacity: 0.8,
       fontWeight: 600
     }
-  }, "\xC1rboles plantados")), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  }, "Árboles plantados")), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 18,
       fontWeight: 800
@@ -2227,7 +2414,7 @@ function ScreenComunidad({
       opacity: 0.8,
       fontWeight: 600
     }
-  }, "CO\u2082 evitado")))))), /*#__PURE__*/React.createElement("div", {
+  }, "CO₂ evitado")))))), /*#__PURE__*/React.createElement("div", {
     style: {
       padding: '0 16px'
     }
@@ -2297,10 +2484,10 @@ function ScreenComunidad({
       color: COLORS.inkMuted,
       fontSize: 18
     }
-  }, "\u203A"))))), /*#__PURE__*/React.createElement(BottomSheet, {
-    open: confirming,
-    onClose: () => setConfirming(false)
-  }, /*#__PURE__*/React.createElement("div", {
+  }, "›"))))), /*#__PURE__*/React.createElement(BottomSheet, {
+    open: !!pending,
+    onClose: () => setPending(null)
+  }, pending && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 17,
       fontWeight: 700,
@@ -2308,28 +2495,28 @@ function ScreenComunidad({
       letterSpacing: -0.2,
       marginBottom: 4
     }
-  }, "Confirmar donaci\xF3n"), /*#__PURE__*/React.createElement("div", {
+  }, "Confirmar donación"), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 12.5,
       color: COLORS.inkMuted,
       marginBottom: 12
     }
-  }, "Red agua potable rural \xB7 Santa B\xE1rbara"), donMode === 'ac' ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(SheetRow, {
+  }, pending.proj.title, " · ", pending.proj.loc), pending.mode === 'ac' ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(SheetRow, {
     label: "Aporte",
-    value: `${donAC} AC`
+    value: `${pending.amount} AC`
   }), /*#__PURE__*/React.createElement(SheetRow, {
     label: "Saldo actual",
     value: `${fmtCL(state.balance)} AC`
   }), /*#__PURE__*/React.createElement(SheetRow, {
-    label: "Saldo despu\xE9s",
-    value: `${fmtCL(state.balance - donAC)} AC`,
+    label: "Saldo después",
+    value: `${fmtCL(state.balance - pending.amount)} AC`,
     strong: true
   })) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(SheetRow, {
     label: "Aporte",
-    value: `${donM3} m³ de agua`
+    value: `${pending.amount} m³ de agua`
   }), /*#__PURE__*/React.createElement(SheetRow, {
     label: "Equivalente en dinero",
-    value: `$${fmtCL(donM3 * CLP_PER_M3)}`,
+    value: `$${fmtCL(pending.amount * CLP_PER_M3)}`,
     strong: true
   }), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -2338,13 +2525,13 @@ function ScreenComunidad({
       padding: '10px 0 0',
       lineHeight: 1.4
     }
-  }, "Demo: pago simulado \xB7 tarifa referencial Essbio $1.180/m\xB3")), /*#__PURE__*/React.createElement(SheetButton, {
+  }, "Demo: pago simulado · tarifa referencial Essbio $1.180/m³")), /*#__PURE__*/React.createElement(SheetButton, {
     onClick: confirmDonation,
-    disabled: donMode === 'ac' && !canDonateAC
-  }, donMode === 'ac' ? `Donar ${donAC} AC` : `Donar $${fmtCL(donM3 * CLP_PER_M3)}`), /*#__PURE__*/React.createElement(SheetButton, {
+    disabled: !canConfirm
+  }, pending.mode === 'ac' ? `Donar ${pending.amount} AC` : `Donar $${fmtCL(pending.amount * CLP_PER_M3)}`), /*#__PURE__*/React.createElement(SheetButton, {
     ghost: true,
-    onClick: () => setConfirming(false)
-  }, "Cancelar")));
+    onClick: () => setPending(null)
+  }, "Cancelar"))));
 }
 
 // ─────────────────────────────────────────────────────────
@@ -2392,6 +2579,1422 @@ function ScreenReportes({
       background: COLORS.bg
     }
   });
+}
+
+// ─────────────────────────────────────────────────────────
+// BIENVENIDA — registro de nombre al primer uso
+// ─────────────────────────────────────────────────────────
+function Welcome({
+  dark,
+  onDone
+}) {
+  const [name, setName] = React.useState('');
+  const valid = name.trim().length >= 2;
+  const go = () => {
+    if (valid) {
+      haptic();
+      onDone(name.trim());
+    }
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: 'absolute',
+      inset: 0,
+      zIndex: 100,
+      display: 'flex',
+      flexDirection: 'column',
+      padding: 'calc(env(safe-area-inset-top, 0px) + 30px) 26px calc(env(safe-area-inset-bottom, 0px) + 26px)'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      display: 'flex',
+      flexDirection: 'column',
+      justifyContent: 'center',
+      alignItems: 'center',
+      textAlign: 'center'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ar-fade"
+  }, /*#__PURE__*/React.createElement("img", {
+    src: logoSrc(dark),
+    alt: "AquaReward",
+    style: {
+      width: 250,
+      maxWidth: '78vw',
+      display: 'block',
+      margin: '0 auto'
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 22,
+      fontSize: 15.5,
+      color: COLORS.inkSoft,
+      lineHeight: 1.55,
+      maxWidth: 300,
+      marginLeft: 'auto',
+      marginRight: 'auto'
+    }
+  }, "Gana ", /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: COLORS.ink
+    }
+  }, "AquaCoins"), " por ahorrar agua, canjea premios reales y apoya proyectos de agua rural en el Biobío."), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 16
+    }
+  }, /*#__PURE__*/React.createElement(Pill, null, "Región del Biobío · con datos de Essbio")))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: 'block',
+      fontSize: 13.5,
+      fontWeight: 700,
+      color: COLORS.ink,
+      marginBottom: 8
+    }
+  }, "Para empezar, ¿cómo te llamas?"), /*#__PURE__*/React.createElement("input", {
+    value: name,
+    onChange: e => setName(e.target.value),
+    onKeyDown: e => {
+      if (e.key === 'Enter') go();
+    },
+    placeholder: "Escribe tu nombre",
+    maxLength: 24,
+    autoComplete: "name",
+    style: {
+      width: '100%',
+      padding: '15px 16px',
+      borderRadius: 15,
+      border: `1.5px solid ${COLORS.divider}`,
+      background: COLORS.card,
+      color: COLORS.ink,
+      fontSize: 16,
+      fontWeight: 600,
+      fontFamily: 'inherit',
+      outline: 'none'
+    }
+  }), /*#__PURE__*/React.createElement("button", {
+    disabled: !valid,
+    onClick: go,
+    style: {
+      width: '100%',
+      marginTop: 12,
+      padding: 16,
+      borderRadius: 15,
+      border: 'none',
+      background: valid ? COLORS.primary : COLORS.divider,
+      color: valid ? '#fff' : COLORS.inkMuted,
+      fontSize: 16,
+      fontWeight: 800,
+      cursor: valid ? 'pointer' : 'not-allowed',
+      fontFamily: 'inherit',
+      transition: 'background .25s'
+    }
+  }, "Comenzar →"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: COLORS.inkMuted,
+      textAlign: 'center',
+      marginTop: 12,
+      lineHeight: 1.4
+    }
+  }, "Tu nombre se guarda solo en este teléfono. Sin correos, sin contraseñas.")));
+}
+
+// ─────────────────────────────────────────────────────────
+// MINI TUTORIALES — se muestran la primera vez que se visita cada pantalla
+// ─────────────────────────────────────────────────────────
+const TUTORIALS = {
+  inicio: [{
+    icon: '💰',
+    t: 'Tu saldo de AquaCoins',
+    d: 'Ganas AquaCoins (AC) automáticamente por ahorrar agua cada mes. El botón "Canjear" te lleva directo a los premios.'
+  }, {
+    icon: '💧',
+    t: 'Tu consumo del mes',
+    d: 'El anillo muestra los m³ que llevas y cuánto falta para tu meta. Si cumples la meta, recibes un bonus de AquaCoins.'
+  }, {
+    icon: '💡',
+    t: 'Tip de hoy',
+    d: 'Cada día un consejo para ahorrar agua en tu casa. Cuando lo hayas leído, tócalo y aparecerá otro.'
+  }],
+  premios: [{
+    icon: '🎁',
+    t: 'Canjea premios reales',
+    d: 'Usa tus AquaCoins en descuentos, kits de ahorro y más. Toca "Canjear" y confirma: el costo se descuenta de tu saldo.'
+  }, {
+    icon: '🔎',
+    t: 'Filtra por categoría',
+    d: 'Los botones de arriba filtran el catálogo: Servicios, Eco o Insignias.'
+  }, {
+    icon: '🧾',
+    t: 'Mis canjes',
+    d: 'Todo lo que canjeas queda registrado al final de esta pantalla, con fecha y costo.'
+  }],
+  comunidad: [{
+    icon: '🤝',
+    t: 'Apoya proyectos reales',
+    d: 'Dona AquaCoins o m³ de agua a proyectos de agua rural del Biobío. Tu aporte avanza la barra de financiamiento.'
+  }, {
+    icon: '👉',
+    t: 'Desliza entre proyectos',
+    d: 'Hay más de un proyecto activo: desliza la tarjeta hacia el lado para conocer el proyecto de Cabrero.'
+  }],
+  reportes: [{
+    icon: '📍',
+    t: 'Mapa comunitario',
+    d: 'Cada pin es un reporte de fuga hecho por vecinos. Tócalo para ver en qué estado está.'
+  }, {
+    icon: '➕',
+    t: 'Reporta una fuga',
+    d: 'Toca "Reportar", elige el tipo de problema y luego toca el punto exacto del mapa donde está la fuga.'
+  }, {
+    icon: '✅',
+    t: 'La comunidad confirma',
+    d: 'Con 3 confirmaciones de vecinos, el reporte se escala automáticamente a Essbio.'
+  }]
+};
+function Tutorial({
+  screen,
+  dark,
+  onDone
+}) {
+  const steps = TUTORIALS[screen];
+  const [i, setI] = React.useState(0);
+  if (!steps || !steps.length) return null;
+  const st = steps[i];
+  const last = i === steps.length - 1;
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: 'absolute',
+      inset: 0,
+      zIndex: 95,
+      background: 'rgba(8,16,28,0.62)',
+      display: 'flex',
+      alignItems: 'flex-end'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: '100%',
+      background: COLORS.card,
+      borderRadius: '26px 26px 0 0',
+      padding: '20px 24px calc(env(safe-area-inset-bottom, 0px) + 20px)',
+      boxShadow: '0 -12px 40px rgba(2,28,138,0.3)'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: 14
+    }
+  }, /*#__PURE__*/React.createElement("img", {
+    src: logoSrc(dark),
+    alt: "AquaReward",
+    style: {
+      height: 20
+    }
+  }), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: COLORS.inkMuted,
+      letterSpacing: 0.5,
+      textTransform: 'uppercase'
+    }
+  }, "Tutorial · ", i + 1, " de ", steps.length)), /*#__PURE__*/React.createElement("div", {
+    key: i,
+    className: "ar-fade"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 38,
+      lineHeight: 1
+    }
+  }, st.icon), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 19,
+      fontWeight: 800,
+      color: COLORS.ink,
+      marginTop: 10,
+      letterSpacing: -0.3
+    }
+  }, st.t), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 14,
+      color: COLORS.inkSoft,
+      marginTop: 6,
+      lineHeight: 1.5,
+      minHeight: 63
+    }
+  }, st.d)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 5,
+      margin: '16px 0 14px'
+    }
+  }, steps.map((_, k) => /*#__PURE__*/React.createElement("span", {
+    key: k,
+    style: {
+      height: 6,
+      borderRadius: 999,
+      flex: k === i ? 2.2 : 1,
+      background: k <= i ? COLORS.primary : COLORS.divider,
+      transition: 'all .3s'
+    }
+  }))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: onDone,
+    style: {
+      flex: 1,
+      background: 'transparent',
+      color: COLORS.inkSoft,
+      border: `1px solid ${COLORS.divider}`,
+      padding: 13,
+      borderRadius: 13,
+      fontSize: 14,
+      fontWeight: 700,
+      cursor: 'pointer',
+      fontFamily: 'inherit'
+    }
+  }, "Saltar"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      haptic();
+      if (last) onDone();else setI(i + 1);
+    },
+    style: {
+      flex: 2,
+      background: COLORS.primary,
+      color: '#fff',
+      border: 'none',
+      padding: 13,
+      borderRadius: 13,
+      fontSize: 14,
+      fontWeight: 700,
+      cursor: 'pointer',
+      fontFamily: 'inherit'
+    }
+  }, last ? '¡Entendido!' : 'Siguiente →'))));
+}
+
+// ─────────────────────────────────────────────────────────
+// PERFIL — avatar (arriba a la derecha en Inicio): nombre y modo fácil
+// ─────────────────────────────────────────────────────────
+function Switch({
+  on,
+  onChange
+}) {
+  return /*#__PURE__*/React.createElement("button", {
+    onClick: () => onChange(!on),
+    "aria-pressed": on,
+    "aria-label": "Activar",
+    style: {
+      width: 52,
+      height: 32,
+      borderRadius: 999,
+      border: 'none',
+      cursor: 'pointer',
+      background: on ? COLORS.good : COLORS.divider,
+      position: 'relative',
+      transition: 'background .25s',
+      flexShrink: 0,
+      padding: 0
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      position: 'absolute',
+      top: 3,
+      left: on ? 23 : 3,
+      width: 26,
+      height: 26,
+      borderRadius: 999,
+      background: '#fff',
+      transition: 'left .25s',
+      boxShadow: '0 1px 4px rgba(0,0,0,0.25)'
+    }
+  }));
+}
+function ProfileSheet({
+  open,
+  onClose,
+  state,
+  dispatch,
+  showToast
+}) {
+  const [name, setName] = React.useState(state.userName);
+  React.useEffect(() => {
+    if (open) setName(state.userName);
+  }, [open, state.userName]);
+  const canSave = name.trim().length >= 2 && name.trim() !== state.userName;
+  const save = () => {
+    if (!canSave) return;
+    dispatch({
+      type: 'setName',
+      name
+    });
+    showToast('Nombre actualizado');
+  };
+  return /*#__PURE__*/React.createElement(BottomSheet, {
+    open: open,
+    onClose: onClose
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 14,
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 52,
+      height: 52,
+      borderRadius: 999,
+      background: `linear-gradient(135deg, ${COLORS.aqua}, ${COLORS.primary})`,
+      color: '#fff',
+      fontWeight: 700,
+      fontSize: 18,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      flexShrink: 0
+    }
+  }, initials(state.userName)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      minWidth: 0
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 18,
+      fontWeight: 800,
+      color: COLORS.ink,
+      letterSpacing: -0.2
+    }
+  }, state.userName), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: COLORS.inkMuted,
+      marginTop: 1
+    }
+  }, "Tus datos viven solo en este teléfono"))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 12,
+      padding: '14px 0',
+      borderTop: `1px solid ${COLORS.divider}`,
+      borderBottom: `1px solid ${COLORS.divider}`
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 26
+    }
+  }, "🤍"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 14.5,
+      fontWeight: 700,
+      color: COLORS.ink
+    }
+  }, "Modo fácil"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: COLORS.inkSoft,
+      lineHeight: 1.4,
+      marginTop: 1
+    }
+  }, "Pantallas simples, letra grande y botones de ayuda. Pensado para adultos mayores.")), /*#__PURE__*/React.createElement(Switch, {
+    on: state.seniorMode,
+    onChange: on => {
+      haptic();
+      dispatch({
+        type: 'setSenior',
+        on
+      });
+      onClose();
+    }
+  })), /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      dispatch({
+        type: 'resetTutorials'
+      });
+      showToast('Verás los tutoriales de nuevo');
+      onClose();
+    },
+    style: {
+      width: '100%',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 12,
+      background: 'transparent',
+      border: 'none',
+      borderBottom: `1px solid ${COLORS.divider}`,
+      padding: '14px 0',
+      cursor: 'pointer',
+      fontFamily: 'inherit',
+      textAlign: 'left'
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 24
+    }
+  }, "🎓"), /*#__PURE__*/React.createElement("span", {
+    style: {
+      flex: 1,
+      fontSize: 14.5,
+      fontWeight: 700,
+      color: COLORS.ink
+    }
+  }, "Ver los tutoriales otra vez"), /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: COLORS.inkMuted,
+      fontSize: 18
+    }
+  }, "›")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      paddingTop: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: COLORS.inkMuted,
+      fontWeight: 700,
+      letterSpacing: 0.5,
+      textTransform: 'uppercase',
+      marginBottom: 8
+    }
+  }, "Tu nombre"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    value: name,
+    onChange: e => setName(e.target.value),
+    onKeyDown: e => {
+      if (e.key === 'Enter') save();
+    },
+    maxLength: 24,
+    style: {
+      flex: 1,
+      minWidth: 0,
+      padding: '12px 14px',
+      borderRadius: 12,
+      border: `1.5px solid ${COLORS.divider}`,
+      background: COLORS.bg,
+      color: COLORS.ink,
+      fontSize: 16,
+      fontWeight: 600,
+      fontFamily: 'inherit',
+      outline: 'none'
+    }
+  }), /*#__PURE__*/React.createElement("button", {
+    disabled: !canSave,
+    onClick: save,
+    style: {
+      padding: '0 18px',
+      borderRadius: 12,
+      border: 'none',
+      background: canSave ? COLORS.primary : COLORS.divider,
+      color: canSave ? '#fff' : COLORS.inkMuted,
+      fontSize: 13.5,
+      fontWeight: 700,
+      cursor: canSave ? 'pointer' : 'not-allowed',
+      fontFamily: 'inherit'
+    }
+  }, "Guardar"))), /*#__PURE__*/React.createElement(SheetButton, {
+    ghost: true,
+    onClick: onClose
+  }, "Cerrar"));
+}
+
+// ─────────────────────────────────────────────────────────
+// MODO FÁCIL — interfaz simplificada para adultos mayores
+// ─────────────────────────────────────────────────────────
+const SENIOR_HELP = {
+  home: {
+    title: '¿Cómo funciona esta pantalla?',
+    lines: ['Arriba están tus AquaCoins: puntos que ganas por ahorrar agua en tu casa.', 'Más abajo ves cuánta agua has usado este mes.', 'Los botones grandes te llevan a cada sección: premios, donaciones, reportes y consejos.', 'Si te pierdes, toca el círculo con el signo "?" — siempre explica la pantalla donde estás.']
+  },
+  premios: {
+    title: '¿Cómo canjeo un premio?',
+    lines: ['Cada tarjeta es un premio. El número junto a la moneda dice cuántos AquaCoins cuesta.', 'Si el botón está azul, te alcanza. Tócalo y confirma: es un solo paso.', 'Tus AquaCoins se descuentan al confirmar. Nunca se cobra dinero.']
+  },
+  donar: {
+    title: '¿Cómo dono?',
+    lines: ['Primero elige a qué proyecto quieres ayudar tocando su tarjeta.', 'Después elige cuántos AquaCoins quieres dar.', 'Al final confirma. Tu aporte ayuda a llevar agua potable a familias del campo.']
+  },
+  reportes: {
+    title: '¿Cómo reporto una fuga?',
+    lines: ['El mapa muestra fugas de agua reportadas por los vecinos.', 'Toca el botón azul "Reportar", elige qué problema ves, y después toca el lugar del mapa donde está.', 'Cuando 3 vecinos confirman una fuga, Essbio la repara.']
+  },
+  consejos: {
+    title: '¿Qué son los consejos?',
+    lines: ['Son ideas simples para gastar menos agua en la casa.', 'Cada consejo explica cuánta agua ahorra.', 'Ahorrar agua te da AquaCoins todos los meses.']
+  }
+};
+function HelpSheet({
+  open,
+  onClose,
+  help
+}) {
+  return /*#__PURE__*/React.createElement(BottomSheet, {
+    open: open,
+    onClose: onClose
+  }, help && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 22,
+      fontWeight: 800,
+      color: COLORS.ink,
+      marginBottom: 12,
+      lineHeight: 1.25,
+      letterSpacing: -0.3
+    }
+  }, help.title), help.lines.map((l, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    style: {
+      display: 'flex',
+      gap: 12,
+      padding: '11px 0',
+      alignItems: 'flex-start',
+      borderBottom: i < help.lines.length - 1 ? `1px solid ${COLORS.divider}` : 'none'
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      width: 28,
+      height: 28,
+      borderRadius: 999,
+      background: COLORS.aquaSoft,
+      color: COLORS.primary,
+      fontSize: 15,
+      fontWeight: 800,
+      flexShrink: 0,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center'
+    }
+  }, i + 1), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 17,
+      lineHeight: 1.5,
+      color: COLORS.ink
+    }
+  }, l))), /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    style: {
+      width: '100%',
+      marginTop: 16,
+      padding: 17,
+      borderRadius: 15,
+      border: 'none',
+      background: COLORS.primary,
+      color: '#fff',
+      fontSize: 18,
+      fontWeight: 800,
+      cursor: 'pointer',
+      fontFamily: 'inherit'
+    }
+  }, "Entendido")));
+}
+function SeniorHeader({
+  title,
+  onBack,
+  onHelp
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      padding: 'calc(env(safe-area-inset-top, 0px) + 14px) 16px 12px'
+    }
+  }, onBack && /*#__PURE__*/React.createElement("button", {
+    onClick: onBack,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      background: COLORS.card,
+      border: `2px solid ${COLORS.divider}`,
+      borderRadius: 14,
+      padding: '12px 16px',
+      fontSize: 17,
+      fontWeight: 800,
+      color: COLORS.ink,
+      cursor: 'pointer',
+      fontFamily: 'inherit',
+      flexShrink: 0
+    }
+  }, "← Volver"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      fontSize: 22,
+      fontWeight: 800,
+      color: COLORS.ink,
+      letterSpacing: -0.3,
+      minWidth: 0
+    }
+  }, title), /*#__PURE__*/React.createElement("button", {
+    onClick: onHelp,
+    "aria-label": "Ayuda",
+    style: {
+      width: 50,
+      height: 50,
+      borderRadius: 999,
+      background: COLORS.primary,
+      color: '#fff',
+      fontSize: 24,
+      fontWeight: 800,
+      border: 'none',
+      cursor: 'pointer',
+      flexShrink: 0,
+      fontFamily: 'inherit'
+    }
+  }, "?"));
+}
+function SeniorBigButton({
+  emoji,
+  label,
+  sub,
+  onClick
+}) {
+  return /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      haptic();
+      onClick();
+    },
+    style: {
+      width: '100%',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 15,
+      background: COLORS.card,
+      border: `2px solid ${COLORS.divider}`,
+      borderRadius: 20,
+      padding: '17px 16px',
+      cursor: 'pointer',
+      fontFamily: 'inherit',
+      textAlign: 'left',
+      boxShadow: COLORS.shadow
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 31,
+      width: 44,
+      textAlign: 'center',
+      flexShrink: 0
+    }
+  }, emoji), /*#__PURE__*/React.createElement("span", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: 'block',
+      fontSize: 19,
+      fontWeight: 800,
+      color: COLORS.ink,
+      letterSpacing: -0.2
+    }
+  }, label), sub && /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: 'block',
+      fontSize: 14.5,
+      color: COLORS.inkSoft,
+      marginTop: 2,
+      lineHeight: 1.35
+    }
+  }, sub)), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 26,
+      color: COLORS.inkMuted,
+      flexShrink: 0
+    }
+  }, "›"));
+}
+function SeniorApp({
+  state,
+  dispatch,
+  dark,
+  showToast
+}) {
+  const [page, setPage] = React.useState('home');
+  const [help, setHelp] = React.useState(false);
+  const [pendingReward, setPendingReward] = React.useState(null);
+  const [donProj, setDonProj] = React.useState(null);
+  const [donAmount, setDonAmount] = React.useState(null);
+  const first = firstName(state.userName);
+  const multiActive = state.multiplierUntil > Date.now();
+  const now = new Date();
+  const month = now.toLocaleDateString('es-CL', {
+    month: 'long'
+  });
+  const goHome = () => {
+    haptic();
+    setPage('home');
+    setHelp(false);
+    setDonProj(null);
+    setDonAmount(null);
+  };
+  const confirmReward = () => {
+    if (!pendingReward || state.balance < pendingReward.cost) return;
+    haptic();
+    dispatch({
+      type: 'redeem',
+      reward: pendingReward
+    });
+    showToast(`Listo: canjeaste ${pendingReward.title}`);
+    setPendingReward(null);
+  };
+  const confirmDon = () => {
+    if (!donProj || !donAmount || state.balance < donAmount) return;
+    haptic();
+    dispatch({
+      type: 'donateAC',
+      pid: donProj.id,
+      amount: donAmount
+    });
+    showToast('¡Muchas gracias por tu aporte!');
+    setDonProj(null);
+    setDonAmount(null);
+  };
+  const scroller = children => /*#__PURE__*/React.createElement("div", {
+    className: "ar-screen",
+    style: {
+      flex: 1,
+      overflowY: 'auto',
+      WebkitOverflowScrolling: 'touch',
+      padding: '2px 16px calc(env(safe-area-inset-bottom, 0px) + 28px)'
+    }
+  }, children);
+  const bigBtn = (label, opts = {}) => ({
+    width: '100%',
+    padding: 17,
+    borderRadius: 15,
+    border: 'none',
+    background: opts.disabled ? COLORS.divider : opts.ghost ? 'transparent' : opts.color || COLORS.primary,
+    color: opts.disabled ? COLORS.inkMuted : opts.ghost ? COLORS.inkSoft : '#fff',
+    ...(opts.ghost ? {
+      border: `2px solid ${COLORS.divider}`
+    } : {}),
+    fontSize: 18,
+    fontWeight: 800,
+    cursor: opts.disabled ? 'not-allowed' : 'pointer',
+    fontFamily: 'inherit',
+    marginTop: opts.mt ?? 0
+  });
+
+  // ── PANTALLA PRINCIPAL ──
+  if (page === 'home') {
+    return /*#__PURE__*/React.createElement("div", {
+      style: {
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: 'calc(env(safe-area-inset-top, 0px) + 16px) 18px 8px'
+      }
+    }, /*#__PURE__*/React.createElement("img", {
+      src: logoSrc(dark),
+      alt: "AquaReward",
+      style: {
+        height: 30
+      }
+    }), /*#__PURE__*/React.createElement("button", {
+      onClick: () => setHelp(true),
+      "aria-label": "Ayuda",
+      style: {
+        width: 50,
+        height: 50,
+        borderRadius: 999,
+        background: COLORS.primary,
+        color: '#fff',
+        fontSize: 24,
+        fontWeight: 800,
+        border: 'none',
+        cursor: 'pointer',
+        fontFamily: 'inherit'
+      }
+    }, "?")), scroller(/*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 27,
+        fontWeight: 800,
+        color: COLORS.ink,
+        letterSpacing: -0.4,
+        padding: '8px 2px 14px'
+      }
+    }, "Hola, ", first, " 👋"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        background: `linear-gradient(135deg, ${COLORS.primary}, ${COLORS.primaryDk})`,
+        borderRadius: 22,
+        padding: '20px 22px',
+        color: '#fff',
+        boxShadow: '0 8px 24px rgba(14,110,126,0.28)'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 14,
+        opacity: 0.85,
+        fontWeight: 700,
+        letterSpacing: 0.3
+      }
+    }, "TUS AQUACOINS"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        marginTop: 8
+      }
+    }, Icon.coin(34), /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontFamily: NUMFONT,
+        fontSize: 52,
+        fontWeight: 600,
+        letterSpacing: -1,
+        lineHeight: 1
+      }
+    }, fmtCL(state.balance))), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 15,
+        opacity: 0.9,
+        marginTop: 10,
+        lineHeight: 1.4
+      }
+    }, "Los ganas ahorrando agua en tu casa.", multiActive ? ' Tienes el bonus ×2 activo.' : '')), /*#__PURE__*/React.createElement(Card, {
+      style: {
+        marginTop: 14,
+        padding: '18px 20px'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 15,
+        fontWeight: 700,
+        color: COLORS.inkSoft
+      }
+    }, "Tu consumo de ", month), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'baseline',
+        gap: 8,
+        marginTop: 6
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontFamily: NUMFONT,
+        fontSize: 44,
+        fontWeight: 600,
+        color: COLORS.ink,
+        letterSpacing: -1,
+        lineHeight: 1
+      }
+    }, "8,7"), /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 18,
+        fontWeight: 700,
+        color: COLORS.inkSoft
+      }
+    }, "m³")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginTop: 10,
+        fontSize: 16.5,
+        fontWeight: 700,
+        color: COLORS.good,
+        background: COLORS.goodSoft,
+        borderRadius: 12,
+        padding: '10px 14px',
+        lineHeight: 1.4
+      }
+    }, "👍 Vas muy bien: 12% menos que el mes pasado.")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12,
+        marginTop: 16
+      }
+    }, /*#__PURE__*/React.createElement(SeniorBigButton, {
+      emoji: "🎁",
+      label: "Mis premios",
+      sub: "Canjea tus AquaCoins",
+      onClick: () => setPage('premios')
+    }), /*#__PURE__*/React.createElement(SeniorBigButton, {
+      emoji: "💧",
+      label: "Donar agua",
+      sub: "Ayuda a familias del campo",
+      onClick: () => setPage('donar')
+    }), /*#__PURE__*/React.createElement(SeniorBigButton, {
+      emoji: "📍",
+      label: "Reportar una fuga",
+      sub: "Avisa si ves agua perdiéndose en la calle",
+      onClick: () => setPage('reportes')
+    }), /*#__PURE__*/React.createElement(SeniorBigButton, {
+      emoji: "💡",
+      label: "Consejos de ahorro",
+      sub: "Ideas para gastar menos agua",
+      onClick: () => setPage('consejos')
+    })), /*#__PURE__*/React.createElement("button", {
+      onClick: () => setHelp(true),
+      style: {
+        ...bigBtn('', {
+          ghost: true,
+          mt: 18
+        }),
+        color: COLORS.primary,
+        borderColor: COLORS.primary
+      }
+    }, "❓ ¿Necesitas ayuda?"), /*#__PURE__*/React.createElement("button", {
+      onClick: () => {
+        haptic();
+        dispatch({
+          type: 'setSenior',
+          on: false
+        });
+      },
+      style: bigBtn('', {
+        ghost: true,
+        mt: 10
+      })
+    }, "Usar modo normal"))), /*#__PURE__*/React.createElement(HelpSheet, {
+      open: help,
+      onClose: () => setHelp(false),
+      help: SENIOR_HELP.home
+    }));
+  }
+
+  // ── MIS PREMIOS ──
+  if (page === 'premios') {
+    return /*#__PURE__*/React.createElement("div", {
+      style: {
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column'
+      }
+    }, /*#__PURE__*/React.createElement(SeniorHeader, {
+      title: "Mis premios",
+      onBack: goHome,
+      onHelp: () => setHelp(true)
+    }), scroller(/*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        background: COLORS.coinSoft,
+        borderRadius: 14,
+        padding: '13px 16px',
+        marginBottom: 14
+      }
+    }, Icon.coin(22), /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 17,
+        fontWeight: 800,
+        color: COLORS.ink
+      }
+    }, "Tienes ", fmtCL(state.balance), " AquaCoins")), REWARDS.map(r => {
+      const isActiveMulti = r.id === 'badge' && multiActive;
+      const can = state.balance >= r.cost && !isActiveMulti;
+      return /*#__PURE__*/React.createElement(Card, {
+        key: r.id,
+        style: {
+          padding: 18,
+          marginBottom: 12
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          display: 'flex',
+          gap: 14,
+          alignItems: 'center'
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          width: 56,
+          height: 56,
+          borderRadius: 15,
+          background: r.tint(),
+          flexShrink: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center'
+        }
+      }, r.icon(30)), /*#__PURE__*/React.createElement("div", {
+        style: {
+          flex: 1,
+          minWidth: 0
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 18,
+          fontWeight: 800,
+          color: COLORS.ink,
+          letterSpacing: -0.2,
+          lineHeight: 1.25
+        }
+      }, r.title), /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 14.5,
+          color: COLORS.inkSoft,
+          marginTop: 3,
+          lineHeight: 1.35
+        }
+      }, r.sub))), /*#__PURE__*/React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 7,
+          marginTop: 13
+        }
+      }, Icon.coin(19), /*#__PURE__*/React.createElement("span", {
+        style: {
+          fontSize: 16.5,
+          fontWeight: 800,
+          color: COLORS.ink
+        }
+      }, "Cuesta ", fmtCL(r.cost), " AquaCoins")), /*#__PURE__*/React.createElement("button", {
+        disabled: !can,
+        onClick: () => can && setPendingReward(r),
+        style: bigBtn('', {
+          disabled: !can,
+          mt: 12
+        })
+      }, isActiveMulti ? 'Ya está activo ✓' : can ? 'Canjear este premio' : `Te faltan ${fmtCL(r.cost - state.balance)} AquaCoins`));
+    }))), /*#__PURE__*/React.createElement(BottomSheet, {
+      open: !!pendingReward,
+      onClose: () => setPendingReward(null)
+    }, pendingReward && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 22,
+        fontWeight: 800,
+        color: COLORS.ink,
+        letterSpacing: -0.3
+      }
+    }, "¿Canjear este premio?"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 17,
+        color: COLORS.inkSoft,
+        margin: '8px 0 6px',
+        lineHeight: 1.4
+      }
+    }, pendingReward.title), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 17,
+        color: COLORS.ink,
+        padding: '10px 0',
+        borderTop: `1px solid ${COLORS.divider}`,
+        lineHeight: 1.6
+      }
+    }, "Te costará ", /*#__PURE__*/React.createElement("b", null, fmtCL(pendingReward.cost), " AquaCoins"), ".", /*#__PURE__*/React.createElement("br", null), "Te quedarán ", /*#__PURE__*/React.createElement("b", null, fmtCL(state.balance - pendingReward.cost), " AquaCoins"), "."), /*#__PURE__*/React.createElement("button", {
+      onClick: confirmReward,
+      style: bigBtn('', {
+        color: COLORS.good,
+        mt: 8
+      })
+    }, "Sí, canjear"), /*#__PURE__*/React.createElement("button", {
+      onClick: () => setPendingReward(null),
+      style: bigBtn('', {
+        ghost: true,
+        mt: 10
+      })
+    }, "No, volver atrás"))), /*#__PURE__*/React.createElement(HelpSheet, {
+      open: help,
+      onClose: () => setHelp(false),
+      help: SENIOR_HELP.premios
+    }));
+  }
+
+  // ── DONAR ──
+  if (page === 'donar') {
+    return /*#__PURE__*/React.createElement("div", {
+      style: {
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column'
+      }
+    }, /*#__PURE__*/React.createElement(SeniorHeader, {
+      title: "Donar agua",
+      onBack: donProj ? () => {
+        setDonProj(null);
+        setDonAmount(null);
+      } : goHome,
+      onHelp: () => setHelp(true)
+    }), scroller(!donProj ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 17.5,
+        fontWeight: 700,
+        color: COLORS.ink,
+        lineHeight: 1.45,
+        padding: '4px 2px 14px'
+      }
+    }, "Elige el proyecto que quieres apoyar:"), PROJECTS.map(p => {
+      const ps = state.projects[p.id];
+      const pct = Math.round(Math.min(ps.funded / p.goal, 1) * 100);
+      return /*#__PURE__*/React.createElement(Card, {
+        key: p.id,
+        onClick: () => {
+          haptic();
+          setDonProj(p);
+        },
+        style: {
+          padding: 0,
+          overflow: 'hidden',
+          marginBottom: 14,
+          cursor: 'pointer'
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          height: 120,
+          backgroundImage: `url("${p.img}")`,
+          backgroundSize: 'cover',
+          backgroundPosition: 'center 40%'
+        }
+      }), /*#__PURE__*/React.createElement("div", {
+        style: {
+          padding: 18
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 19,
+          fontWeight: 800,
+          color: COLORS.ink,
+          letterSpacing: -0.2
+        }
+      }, p.title), /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 15,
+          color: COLORS.inkSoft,
+          marginTop: 3
+        }
+      }, p.loc, " · ", p.fam), /*#__PURE__*/React.createElement("div", {
+        style: {
+          height: 12,
+          borderRadius: 999,
+          background: COLORS.divider,
+          overflow: 'hidden',
+          marginTop: 12
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          width: `${pct}%`,
+          height: '100%',
+          background: `linear-gradient(90deg, ${COLORS.aqua}, ${COLORS.primary})`,
+          borderRadius: 999
+        }
+      })), /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 15.5,
+          fontWeight: 700,
+          color: COLORS.ink,
+          marginTop: 8
+        }
+      }, pct, "% completado"), /*#__PURE__*/React.createElement("button", {
+        style: bigBtn('', {
+          mt: 12
+        })
+      }, "Elegir este proyecto")));
+    })) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        background: COLORS.aquaSoft,
+        borderRadius: 14,
+        padding: '13px 16px',
+        marginBottom: 16
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 22
+      }
+    }, "💧"), /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 15.5,
+        fontWeight: 700,
+        color: COLORS.ink,
+        lineHeight: 1.35
+      }
+    }, "Proyecto: ", donProj.title, " (", donProj.loc, ")")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 17.5,
+        fontWeight: 700,
+        color: COLORS.ink,
+        lineHeight: 1.45,
+        paddingBottom: 14
+      }
+    }, "¿Cuántos AquaCoins quieres donar?"), [25, 50, 100, 200].map(v => {
+      const can = state.balance >= v;
+      return /*#__PURE__*/React.createElement("button", {
+        key: v,
+        disabled: !can,
+        onClick: () => {
+          haptic();
+          setDonAmount(v);
+        },
+        style: {
+          width: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          background: COLORS.card,
+          border: `2px solid ${COLORS.divider}`,
+          borderRadius: 16,
+          padding: '17px 18px',
+          cursor: can ? 'pointer' : 'not-allowed',
+          fontFamily: 'inherit',
+          marginBottom: 11,
+          opacity: can ? 1 : 0.5,
+          boxShadow: COLORS.shadow
+        }
+      }, Icon.coin(24), /*#__PURE__*/React.createElement("span", {
+        style: {
+          flex: 1,
+          textAlign: 'left',
+          fontSize: 19,
+          fontWeight: 800,
+          color: COLORS.ink
+        }
+      }, v, " AquaCoins"), /*#__PURE__*/React.createElement("span", {
+        style: {
+          fontSize: 24,
+          color: COLORS.inkMuted
+        }
+      }, "›"));
+    }), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 14.5,
+        color: COLORS.inkMuted,
+        textAlign: 'center',
+        marginTop: 6
+      }
+    }, "Tienes ", fmtCL(state.balance), " AquaCoins"))), /*#__PURE__*/React.createElement(BottomSheet, {
+      open: !!(donProj && donAmount),
+      onClose: () => setDonAmount(null)
+    }, donProj && donAmount && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 22,
+        fontWeight: 800,
+        color: COLORS.ink,
+        letterSpacing: -0.3
+      }
+    }, "¿Confirmas tu donación?"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 17,
+        color: COLORS.ink,
+        padding: '12px 0',
+        lineHeight: 1.6
+      }
+    }, "Vas a donar ", /*#__PURE__*/React.createElement("b", null, donAmount, " AquaCoins"), " al proyecto de ", /*#__PURE__*/React.createElement("b", null, donProj.loc), ".", /*#__PURE__*/React.createElement("br", null), "Te quedarán ", /*#__PURE__*/React.createElement("b", null, fmtCL(state.balance - donAmount), " AquaCoins"), "."), /*#__PURE__*/React.createElement("button", {
+      onClick: confirmDon,
+      style: bigBtn('', {
+        color: COLORS.good
+      })
+    }, "Sí, donar"), /*#__PURE__*/React.createElement("button", {
+      onClick: () => setDonAmount(null),
+      style: bigBtn('', {
+        ghost: true,
+        mt: 10
+      })
+    }, "No, volver atrás"))), /*#__PURE__*/React.createElement(HelpSheet, {
+      open: help,
+      onClose: () => setHelp(false),
+      help: SENIOR_HELP.donar
+    }));
+  }
+
+  // ── REPORTES (mapa) ──
+  if (page === 'reportes') {
+    return /*#__PURE__*/React.createElement("div", {
+      style: {
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column'
+      }
+    }, /*#__PURE__*/React.createElement(SeniorHeader, {
+      title: "Reportar fuga",
+      onBack: goHome,
+      onHelp: () => setHelp(true)
+    }), /*#__PURE__*/React.createElement("div", {
+      style: {
+        flex: 1,
+        minHeight: 0
+      }
+    }, /*#__PURE__*/React.createElement(ScreenReportes, {
+      dark: dark
+    })), /*#__PURE__*/React.createElement(HelpSheet, {
+      open: help,
+      onClose: () => setHelp(false),
+      help: SENIOR_HELP.reportes
+    }));
+  }
+
+  // ── CONSEJOS ──
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      height: '100%',
+      display: 'flex',
+      flexDirection: 'column'
+    }
+  }, /*#__PURE__*/React.createElement(SeniorHeader, {
+    title: "Consejos",
+    onBack: goHome,
+    onHelp: () => setHelp(true)
+  }), scroller(TIPS.map((tip, i) => /*#__PURE__*/React.createElement(Card, {
+    key: i,
+    style: {
+      padding: 18,
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 12,
+      alignItems: 'flex-start'
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      width: 34,
+      height: 34,
+      borderRadius: 999,
+      background: COLORS.aquaSoft,
+      color: COLORS.primary,
+      fontSize: 16,
+      fontWeight: 800,
+      flexShrink: 0,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center'
+    }
+  }, i + 1), /*#__PURE__*/React.createElement("div", {
+    style: {
+      minWidth: 0
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 18,
+      fontWeight: 800,
+      color: COLORS.ink,
+      letterSpacing: -0.2,
+      lineHeight: 1.3
+    }
+  }, tip.t), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 15.5,
+      color: COLORS.inkSoft,
+      marginTop: 5,
+      lineHeight: 1.5
+    }
+  }, tip.d)))))), /*#__PURE__*/React.createElement(HelpSheet, {
+    open: help,
+    onClose: () => setHelp(false),
+    help: SENIOR_HELP.consejos
+  }));
 }
 
 // ─────────────────────────────────────────────────────────
@@ -2495,6 +4098,7 @@ function App() {
   });
   const [state, dispatch] = React.useReducer(reducer, undefined, loadState);
   const [toast, setToast] = React.useState(null);
+  const [profileOpen, setProfileOpen] = React.useState(false);
   const toastTimer = React.useRef(null);
   const showToast = React.useCallback(text => {
     clearTimeout(toastTimer.current);
@@ -2523,11 +4127,69 @@ function App() {
     });
   };
   const bg = `linear-gradient(180deg, ${base.bgTop} 0%, ${base.bgTop} 30%, ${base.bgBot} 100%)`;
+  const shellStyle = {
+    position: 'relative',
+    height: '100%',
+    overflow: 'hidden',
+    background: bg,
+    color: COLORS.ink,
+    fontFamily: '"Geist", ui-sans-serif, -apple-system, system-ui, sans-serif'
+  };
+  const texture = /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: 'absolute',
+      inset: 0,
+      pointerEvents: 'none',
+      zIndex: 0,
+      backgroundImage: PAPER_TEXTURE,
+      backgroundRepeat: 'repeat',
+      mixBlendMode: dark ? 'screen' : 'multiply',
+      opacity: dark ? 0.5 : 1
+    }
+  });
+
+  // 1) Primer uso: registro de nombre
+  if (!state.userName) {
+    return /*#__PURE__*/React.createElement("div", {
+      id: "app",
+      style: shellStyle
+    }, texture, /*#__PURE__*/React.createElement(Welcome, {
+      dark: dark,
+      onDone: name => dispatch({
+        type: 'setName',
+        name
+      })
+    }));
+  }
+
+  // 2) Modo fácil (adultos mayores)
+  if (state.seniorMode) {
+    return /*#__PURE__*/React.createElement("div", {
+      id: "app",
+      style: shellStyle
+    }, texture, /*#__PURE__*/React.createElement("div", {
+      style: {
+        position: 'relative',
+        zIndex: 1,
+        height: '100%'
+      }
+    }, /*#__PURE__*/React.createElement(SeniorApp, {
+      state: state,
+      dispatch: dispatch,
+      dark: dark,
+      showToast: showToast
+    })), /*#__PURE__*/React.createElement(Toast, {
+      msg: toast
+    }));
+  }
+
+  // 3) Modo normal
   const screens = {
     inicio: /*#__PURE__*/React.createElement(ScreenInicio, {
       state: state,
       dispatch: dispatch,
-      goPremios: () => switchTab('premios')
+      goPremios: () => switchTab('premios'),
+      openProfile: () => setProfileOpen(true)
     }),
     premios: /*#__PURE__*/React.createElement(ScreenPremios, {
       state: state,
@@ -2544,28 +4206,11 @@ function App() {
       dark: dark
     })
   };
+  const showTut = !state.tutorialsSeen[tab] && !profileOpen;
   return /*#__PURE__*/React.createElement("div", {
     id: "app",
-    style: {
-      position: 'relative',
-      height: '100%',
-      overflow: 'hidden',
-      background: bg,
-      color: COLORS.ink,
-      fontFamily: '"Geist", ui-sans-serif, -apple-system, system-ui, sans-serif'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: 'absolute',
-      inset: 0,
-      pointerEvents: 'none',
-      zIndex: 0,
-      backgroundImage: PAPER_TEXTURE,
-      backgroundRepeat: 'repeat',
-      mixBlendMode: dark ? 'screen' : 'multiply',
-      opacity: dark ? 0.5 : 1
-    }
-  }), TABS.map(t => {
+    style: shellStyle
+  }, texture, TABS.map(t => {
     if (!visited[t.id]) return null;
     const isActive = tab === t.id;
     const isMap = t.id === 'reportes';
@@ -2590,6 +4235,19 @@ function App() {
     active: tab,
     onChange: switchTab,
     dark: dark
+  }), /*#__PURE__*/React.createElement(ProfileSheet, {
+    open: profileOpen,
+    onClose: () => setProfileOpen(false),
+    state: state,
+    dispatch: dispatch,
+    showToast: showToast
+  }), showTut && /*#__PURE__*/React.createElement(Tutorial, {
+    screen: tab,
+    dark: dark,
+    onDone: () => dispatch({
+      type: 'tutorialSeen',
+      screen: tab
+    })
   }), /*#__PURE__*/React.createElement(Toast, {
     msg: toast
   }));

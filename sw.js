@@ -1,7 +1,7 @@
 // AquaReward — service worker: precache de la app + caché de tipografías.
 // Estrategia: cache-first para recursos propios (la app funciona 100% offline
 // tras la primera visita); stale-while-revalidate para Google Fonts.
-const VERSION = 'aquareward-v1';
+const VERSION = 'aquareward-v2';
 const FONT_CACHE = VERSION + '-fonts';
 const CORE = [
   './',
@@ -13,6 +13,9 @@ const CORE = [
   './vendor/react-dom.production.min.js',
   './assets/essbio-logo.png',
   './assets/tubul-rural.jpg',
+  './assets/cabrero-rural.jpg',
+  './assets/logo-light.png',
+  './assets/logo-dark.png',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/maskable-512.png',
